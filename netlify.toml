@@ -1,0 +1,7 @@
+# NOTE: Flask app cần Python server thật.
+# Netlify chỉ host static files.
+# => Dùng Render.com (miễn phí, hỗ trợ Python Flask)
+# Xem hướng dẫn chi tiết trong DEPLOY_GUIDE.md
+
+[build]
+  command = "echo 'Deploy to Render instead - see DEPLOY_GUIDE.md'"
