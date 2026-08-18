@@ -119,3 +119,4 @@ Lấy `SUPABASE_URL` và `SUPABASE_KEY` (dùng **anon/public key** hoặc
   | A    | Độ chính xác ≥ 90% và WPM ≥ 100      |
   | B    | Độ chính xác ≥ 80% và WPM ≥ 70       |
   | C    | Còn lại                              |
+# speedreader
