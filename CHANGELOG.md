@@ -5,6 +5,43 @@ Tài liệu này ghi lại toàn bộ thay đổi qua từng phiên bản của 
 
 ---
 
+## [2.0.0] - 2026-08-18  ← **PHIÊN BẢN HIỆN TẠI**
+
+### 🎨 Added — UI/UX hoàn toàn mới theo thiết kế UXpilot
+
+**Trang học sinh (`/`) — Learning Room:**
+- Sidebar navigation cố định (desktop) / drawer (mobile) với logo SpeedAI, profile avatar, menu items
+- Hero dashboard: WPM Baseline lớn (420 WPM style), Word Retention Rate bar chart 7 ngày
+- Reading pane: font Merriweather serif, highlight từ đọc đúng màu xanh lá mượt mà
+- Microphone button tròn lớn 80px có hiệu ứng `pulse-ring` animation
+- Audio Speed slider có waveform visualizer động
+- Performance metrics panel: Reading Speed, Accuracy, Grade Rank (S/A/B/C)
+- Article cards đẹp có ảnh thumbnail từ Unsplash, badge nguồn (BBC/CNN/Reuters), difficulty badge (Easy/Medium/Hard)
+- Mobile bottom navigation (Home/Library/Stats/Admin)
+- Local storage: lưu lịch sử điểm số, daily streak, weekly goal progress bar
+- Section Library: xem toàn bộ bài báo dạng grid
+- Section Metrics: lịch sử 10 buổi luyện gần nhất
+
+**Trang admin (`/admin`) — Content Crawler Controller:**
+- Dark sidebar `#1a252f` với active state màu xanh `brand-blue`
+- Header có "Crawler Engine Online" badge animate pulse
+- Source Configuration: dropdown chọn nguồn (BBC/CNN/Reuters), category, nút RUN CRAWLER
+- Article queue: card bài báo có ảnh thumbnail grayscale → màu khi hover
+- Approve/Reject từng bài, Select All, Batch Approve
+- Mobile responsive: stacked layout + bottom tab bar
+
+**Backend:**
+- `estimate_difficulty()`: tự động phân loại Easy/Medium/Hard dựa trên độ dài từ
+- `read_time()`: ước tính thời gian đọc (150 WPM)
+- Ảnh thumbnail tự động gán theo độ khó bài báo
+
+### Changed
+- CSS hoàn toàn dùng Tailwind CDN + custom `tailwind.config`
+- Font: Plus Jakarta Sans (UI) + Merriweather (reading text)
+- Animation: `pulse-ring`, `wave`, `sidebar-drawer` slide transition
+
+---
+
 ## [1.0.0] - 2026-08-14
 
 ### 🎉 Phát hành lần đầu
