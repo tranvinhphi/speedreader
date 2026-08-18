@@ -1,22 +1,17 @@
 # -*- coding: utf-8 -*-
 """
 ============================================================
-  AI ENGLISH SPEED READER
-  Ứng dụng luyện đọc tiếng Anh tốc độ cao cho học sinh,
-  sử dụng Web Speech API để nhận diện giọng nói + chấm điểm
-  tự động (WPM, độ chính xác, xếp hạng).
+  AI ENGLISH SPEED READER  v2.0
+  UI/UX hoàn toàn mới theo thiết kế UXpilot:
+  - Trang học sinh: sidebar navigation, WPM baseline dashboard,
+    reading pane + microphone button, article cards có ảnh,
+    audio speed slider, performance metrics (S/A/B/C rank)
+  - Trang admin: content crawler controller, pending article queue,
+    approve/reject workflow
+  - Responsive: Desktop (sidebar) + Mobile (bottom nav + drawer)
 
-  Backend : Flask + feedparser (crawl RSS) + Supabase (lưu trữ)
-  Frontend: HTML/CSS/JS thuần, nhúng dạng chuỗi trong Flask,
-            thiết kế Mobile-first, Responsive cho PC/iPhone/iPad.
-
-  Cách chạy local:
-      pip install -r requirements.txt
-      export SUPABASE_URL="https://xxxx.supabase.co"
-      export SUPABASE_KEY="xxxxxxxx"
-      python app.py
-
-  Deploy Render: xem hướng dẫn trong README.md
+  Backend : Flask + feedparser + Supabase
+  Deploy  : Render + Supabase (xem README.md)
 ============================================================
 """
 
@@ -28,1008 +23,1374 @@ from datetime import datetime, timezone
 import feedparser
 from flask import Flask, jsonify, request, render_template_string
 
-# supabase-py là thư viện tùy chọn: nếu chưa cấu hình biến môi trường,
-# ứng dụng vẫn chạy được ở chế độ "demo" (không lưu trữ vĩnh viễn).
 try:
-    from supabase import create_client, Client
-except ImportError:  # pragma: no cover
+    from supabase import create_client
+except ImportError:
     create_client = None
-    Client = None
 
 app = Flask(__name__)
 
-# ============================================================
-# PHẦN 1: BACKEND - CẤU HÌNH & KẾT NỐI SUPABASE
-# ============================================================
-
+# ── Supabase ─────────────────────────────────────────────
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "").strip()
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "").strip()
-
 supabase = None
-if SUPABASE_URL and SUPABASE_KEY and create_client is not None:
+if SUPABASE_URL and SUPABASE_KEY and create_client:
     try:
         supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
-    except Exception as e:  # pragma: no cover
-        print(f"[CẢNH BÁO] Không thể kết nối Supabase: {e}")
-        supabase = None
-else:
-    print("[THÔNG BÁO] Chưa cấu hình SUPABASE_URL/SUPABASE_KEY - "
-          "ứng dụng chạy ở chế độ DEMO (không lưu trữ vĩnh viễn).")
+    except Exception as e:
+        print(f"[WARN] Supabase: {e}")
 
-# Tên 2 bảng cần tạo sẵn trong Supabase (xem SQL mẫu trong README.md)
-TABLE_ARTICLES = "articles"   # id, title, source, url, content, created_at
-TABLE_SCORES = "scores"       # id, student_name, article_title, wpm, accuracy, rank, created_at
+TABLE_ARTICLES = "articles"
+TABLE_SCORES   = "scores"
 
-# Dữ liệu mẫu dùng khi chưa cấu hình Supabase, để giao diện luôn có bài đọc thử
+# ── Demo data ─────────────────────────────────────────────
 DEMO_ARTICLES = [
     {
         "id": "demo-1",
-        "source": "BBC: AI Transforms Tech",
-        "title": "Artificial Intelligence Is Reshaping the Technology Industry",
+        "source": "BBC",
+        "title": "The Rise of Artificial Intelligence",
         "content": (
-            "Artificial intelligence is transforming the landscape of global "
-            "technology. Companies across every sector are racing to adopt "
-            "machine learning tools that can analyze data, automate tasks, "
-            "and generate new ideas faster than ever before. However, "
-            "experts warn that this rapid change also brings new challenges "
-            "around privacy, jobs, and fairness that society must address "
-            "together."
+            "In recent years, artificial intelligence technology has evolved "
+            "rapidly across industries. From healthcare diagnostics to autonomous "
+            "vehicles, machine learning models now process billions of data points "
+            "daily. Researchers at leading universities report that natural language "
+            "processing systems can now summarize complex scientific papers with over "
+            "ninety percent accuracy. As adoption accelerates, educators are "
+            "integrating AI literacy into core curricula to prepare students for a "
+            "workforce where human-machine collaboration is the new standard."
         ),
+        "difficulty": "Easy",
+        "image": "https://images.unsplash.com/photo-1451187580459-43490279c0fa?auto=format&fit=crop&w=600&q=70",
         "url": "",
+        "read_time": "5",
     },
     {
         "id": "demo-2",
-        "source": "CNN: Climate Change Crisis",
-        "title": "Global Leaders Debate the Future of Climate Policy",
+        "source": "CNN",
+        "title": "The Future of Quantum Computing",
         "content": (
-            "Climate change continues to affect communities around the "
-            "world, from rising sea levels to extreme weather events. "
-            "Scientists say that reducing carbon emissions quickly is "
-            "essential to prevent long term damage. Governments are now "
-            "under pressure to invest in clean energy and support "
-            "countries that are most vulnerable to these changes."
+            "Quantum computing is breaking the silicon barrier and pushing the "
+            "boundaries of what is computationally possible. Scientists at major "
+            "research labs have demonstrated quantum processors capable of solving "
+            "problems that would take classical computers thousands of years. "
+            "Industries from pharmaceuticals to finance are watching closely, "
+            "eager to harness the power of quantum algorithms for drug discovery, "
+            "portfolio optimization, and cryptography. However, significant "
+            "engineering challenges remain before quantum computers become "
+            "commercially viable at scale."
         ),
+        "difficulty": "Medium",
+        "image": "https://images.unsplash.com/photo-1518770660439-4636190af475?auto=format&fit=crop&w=600&q=70",
         "url": "",
+        "read_time": "7",
     },
     {
         "id": "demo-3",
-        "source": "Reuters: Global Markets",
-        "title": "Investors Watch Global Markets Amid Economic Uncertainty",
+        "source": "Reuters",
+        "title": "Urban Planning in the 21st Century",
         "content": (
-            "Global markets moved cautiously this week as investors "
-            "weighed new economic data against ongoing uncertainty in "
-            "trade policy. Analysts believe that steady growth is still "
-            "possible if central banks manage interest rates carefully. "
-            "Many traders are choosing to wait for clearer signals before "
-            "making major decisions."
+            "Designing smarter megacities has become a global priority as urban "
+            "populations continue to grow. City planners now rely on data analytics, "
+            "sensor networks, and artificial intelligence to manage traffic flow, "
+            "reduce energy consumption, and improve public services. Sustainable "
+            "architecture featuring vertical gardens and solar-integrated glass "
+            "facades is changing skylines from Singapore to Stockholm. The challenge "
+            "ahead lies in ensuring that smart city benefits reach all residents, "
+            "regardless of income or neighborhood."
         ),
+        "difficulty": "Hard",
+        "image": "https://images.unsplash.com/photo-1449824913935-59a10b8d2000?auto=format&fit=crop&w=600&q=70",
         "url": "",
+        "read_time": "9",
+    },
+    {
+        "id": "demo-4",
+        "source": "NatGeo",
+        "title": "Deep Ocean Exploration",
+        "content": (
+            "The deep ocean remains one of the least explored frontiers on Earth. "
+            "Recent expeditions using remotely operated vehicles have discovered "
+            "thousands of new species living in the crushing darkness of the abyss. "
+            "Hydrothermal vents support entire ecosystems powered not by sunlight "
+            "but by chemical energy. These findings challenge our assumptions about "
+            "where life can thrive and have implications for the search for life "
+            "on other planets and moons in our solar system."
+        ),
+        "difficulty": "Easy",
+        "image": "https://images.unsplash.com/photo-1532094349884-543bc11b234d?auto=format&fit=crop&w=600&q=70",
+        "url": "",
+        "read_time": "4",
     },
 ]
 
-# Danh sách nguồn RSS quốc tế dùng để quét tin mới ở trang Admin
 RSS_FEEDS = {
-    "BBC: AI Transforms Tech": "http://feeds.bbci.co.uk/news/technology/rss.xml",
-    "BBC: World News": "http://feeds.bbci.co.uk/news/world/rss.xml",
-    "CNN: Climate Change Crisis": "http://rss.cnn.com/rss/cnn_topstories.rss",
-    "Reuters: Global Markets": "https://www.reutersagency.com/feed/?best-topics=business-finance&post_type=best",
+    "BBC": "http://feeds.bbci.co.uk/news/technology/rss.xml",
+    "BBC World": "http://feeds.bbci.co.uk/news/world/rss.xml",
+    "CNN": "http://rss.cnn.com/rss/cnn_topstories.rss",
+    "Reuters": "https://feeds.reuters.com/reuters/technologyNews",
 }
 
+DIFFICULTY_IMAGES = {
+    "Easy":   "https://images.unsplash.com/photo-1451187580459-43490279c0fa?auto=format&fit=crop&w=600&q=70",
+    "Medium": "https://images.unsplash.com/photo-1518770660439-4636190af475?auto=format&fit=crop&w=600&q=70",
+    "Hard":   "https://images.unsplash.com/photo-1507413245164-6160d8298b31?auto=format&fit=crop&w=600&q=70",
+}
 
-def clean_html_text(raw_html: str) -> str:
-    """Loại bỏ thẻ HTML và giải mã ký tự đặc biệt từ nội dung RSS."""
-    if not raw_html:
-        return ""
-    text = re.sub(r"<[^>]+>", " ", raw_html)
+def clean_html(raw):
+    if not raw: return ""
+    text = re.sub(r"<[^>]+>", " ", raw)
     text = html.unescape(text)
-    text = re.sub(r"\s+", " ", text).strip()
-    return text
+    return re.sub(r"\s+", " ", text).strip()
 
+def word_count(text):
+    return len(text.split())
 
-def calc_rank(wpm: float, accuracy: float) -> str:
-    """Xếp hạng học sinh dựa trên tốc độ đọc (WPM) và độ chính xác (%)."""
-    if accuracy >= 95 and wpm >= 130:
-        return "S"
-    if accuracy >= 90 and wpm >= 100:
-        return "A"
-    if accuracy >= 80 and wpm >= 70:
-        return "B"
+def estimate_difficulty(text):
+    wc = word_count(text)
+    avg_word = sum(len(w) for w in text.split()) / max(wc, 1)
+    if avg_word > 6 or wc > 200: return "Hard"
+    if avg_word > 4.5 or wc > 100: return "Medium"
+    return "Easy"
+
+def read_time(text):
+    return max(1, round(word_count(text) / 150))
+
+def calc_rank(wpm, accuracy):
+    if accuracy >= 95 and wpm >= 130: return "S"
+    if accuracy >= 90 and wpm >= 100: return "A"
+    if accuracy >= 80 and wpm >= 70:  return "B"
     return "C"
 
-
-# ============================================================
-# PHẦN 1: BACKEND - CÁC API
-# ============================================================
+# ═══════════════════════════════════════════════════════════
+# BACKEND APIs
+# ═══════════════════════════════════════════════════════════
 
 @app.route("/api/crawl", methods=["POST"])
 def api_crawl():
-    """Quét tin mới từ các nguồn RSS quốc tế, trả về danh sách bài (chưa lưu)."""
     found = []
-    for source_name, feed_url in RSS_FEEDS.items():
+    for source, feed_url in RSS_FEEDS.items():
         try:
             feed = feedparser.parse(feed_url)
-            for entry in feed.entries[:6]:
-                title = clean_html_text(entry.get("title", ""))
-                summary = clean_html_text(
-                    entry.get("summary", entry.get("description", ""))
-                )
-                link = entry.get("link", "")
-                # Chỉ lấy bài có nội dung đủ dài để luyện đọc (>= 25 từ)
-                if len(summary.split()) < 25:
-                    continue
+            for entry in feed.entries[:5]:
+                title   = clean_html(entry.get("title", ""))
+                summary = clean_html(entry.get("summary", entry.get("description", "")))
+                link    = entry.get("link", "")
+                if len(summary.split()) < 25: continue
+                diff = estimate_difficulty(summary)
                 found.append({
-                    "source": source_name,
-                    "title": title,
-                    "content": summary,
-                    "url": link,
+                    "source":     source,
+                    "title":      title,
+                    "content":    summary,
+                    "url":        link,
+                    "difficulty": diff,
+                    "image":      DIFFICULTY_IMAGES.get(diff, DIFFICULTY_IMAGES["Medium"]),
+                    "read_time":  str(read_time(summary)),
+                    "word_count": word_count(summary),
                 })
         except Exception as e:
-            print(f"[LỖI CRAWL] {source_name}: {e}")
-            continue
-
+            print(f"[CRAWL ERR] {source}: {e}")
     return jsonify({"success": True, "count": len(found), "articles": found})
-
 
 @app.route("/api/approve", methods=["POST"])
 def api_approve():
-    """Duyệt 1 bài báo do Admin chọn, lưu vào Supabase."""
     data = request.get_json(force=True, silent=True) or {}
-    title = (data.get("title") or "").strip()
-    content = (data.get("content") or "").strip()
-
-    if not title or not content:
-        return jsonify({"success": False, "error": "Thiếu tiêu đề hoặc nội dung bài báo."}), 400
-
+    if not data.get("title") or not data.get("content"):
+        return jsonify({"success": False, "error": "Thiếu dữ liệu"}), 400
     record = {
-        "title": title,
-        "source": data.get("source", ""),
-        "url": data.get("url", ""),
-        "content": content,
+        "title":      data["title"],
+        "source":     data.get("source", ""),
+        "url":        data.get("url", ""),
+        "content":    data["content"],
+        "difficulty": data.get("difficulty", "Medium"),
+        "image":      data.get("image", DIFFICULTY_IMAGES["Medium"]),
+        "read_time":  data.get("read_time", "5"),
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
-
     if supabase is None:
-        # Chế độ demo: xác nhận thành công giả lập, không lưu vĩnh viễn
-        return jsonify({
-            "success": True,
-            "demo_mode": True,
-            "message": "Chưa cấu hình Supabase - bài báo KHÔNG được lưu vĩnh viễn (chế độ demo).",
-            "data": record,
-        })
-
+        return jsonify({"success": True, "demo_mode": True, "data": record})
     try:
         res = supabase.table(TABLE_ARTICLES).insert(record).execute()
         return jsonify({"success": True, "data": res.data})
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
 
-
 @app.route("/api/articles", methods=["GET"])
 def api_articles():
-    """Lấy danh sách bài báo đã được duyệt, hiển thị cho học sinh chọn."""
     if supabase is None:
         return jsonify({"success": True, "demo_mode": True, "articles": DEMO_ARTICLES})
-
     try:
-        res = (
-            supabase.table(TABLE_ARTICLES)
-            .select("*")
-            .order("created_at", desc=True)
-            .limit(30)
-            .execute()
-        )
+        res = (supabase.table(TABLE_ARTICLES)
+               .select("*").order("created_at", desc=True).limit(20).execute())
         articles = res.data or []
         if not articles:
-            # Nếu Supabase chưa có bài nào, vẫn cho học sinh luyện với bài demo
             return jsonify({"success": True, "demo_mode": True, "articles": DEMO_ARTICLES})
         return jsonify({"success": True, "articles": articles})
     except Exception as e:
         return jsonify({"success": False, "error": str(e), "articles": DEMO_ARTICLES})
 
-
 @app.route("/api/save_score", methods=["POST"])
 def api_save_score():
-    """Lưu kết quả luyện đọc (WPM, độ chính xác, xếp hạng) của học sinh."""
     data = request.get_json(force=True, silent=True) or {}
-    student_name = (data.get("student_name") or "").strip()
-
-    if not student_name:
-        return jsonify({"success": False, "error": "Thiếu tên học sinh."}), 400
-
+    if not data.get("student_name"):
+        return jsonify({"success": False, "error": "Thiếu tên học sinh"}), 400
     record = {
-        "student_name": student_name,
+        "student_name":  data["student_name"],
         "article_title": data.get("article_title", ""),
-        "wpm": data.get("wpm", 0),
-        "accuracy": data.get("accuracy", 0),
-        "rank": data.get("rank", "C"),
-        "created_at": datetime.now(timezone.utc).isoformat(),
+        "wpm":           data.get("wpm", 0),
+        "accuracy":      data.get("accuracy", 0),
+        "rank":          data.get("rank", "C"),
+        "created_at":    datetime.now(timezone.utc).isoformat(),
     }
-
     if supabase is None:
-        return jsonify({
-            "success": True,
-            "demo_mode": True,
-            "message": "Chưa cấu hình Supabase - điểm số KHÔNG được lưu vĩnh viễn (chế độ demo).",
-            "data": record,
-        })
-
+        return jsonify({"success": True, "demo_mode": True, "data": record})
     try:
         res = supabase.table(TABLE_SCORES).insert(record).execute()
         return jsonify({"success": True, "data": res.data})
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
 
-
-# ============================================================
-# PHẦN 2: FRONTEND - CSS DÙNG CHUNG (Mobile-first, Responsive)
-# ============================================================
-
-BASE_CSS = """
-:root{
-  --navy:#1e2a44;
-  --navy-light:#27395c;
-  --blue:#2563eb;
-  --blue-dark:#1d4ed8;
-  --green:#16a34a;
-  --green-bg:#dcfce7;
-  --bg:#eef1f6;
-  --card:#ffffff;
-  --text:#1f2937;
-  --muted:#6b7280;
-  --border:#e2e8f0;
-  --radius:14px;
-  --shadow:0 10px 30px rgba(30,42,68,0.08);
+# ═══════════════════════════════════════════════════════════
+# SHARED CSS
+# ═══════════════════════════════════════════════════════════
+SHARED_CSS = """
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Merriweather:wght@400;700&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/js/all.min.js" crossorigin="anonymous"></script>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+tailwind.config = {
+  theme: { extend: {
+    fontFamily: { sans: ['"Plus Jakarta Sans"', 'sans-serif'], serif: ['Merriweather','serif'] },
+    colors: { brand: { dark:'#1a252f', blue:'#2563eb', emerald:'#2ecc71', graybg:'#f8fafc' } }
+  }}
 }
-*{box-sizing:border-box;}
-html,body{margin:0;padding:0;}
-body{
-  font-family:'Inter','Segoe UI',system-ui,-apple-system,sans-serif;
-  background:var(--bg);
-  color:var(--text);
-  line-height:1.5;
-  -webkit-font-smoothing:antialiased;
-}
-.header{
-  background:linear-gradient(135deg,var(--navy),var(--navy-light));
-  color:#fff;
-  padding:14px 16px;
-  display:flex;
-  align-items:center;
-  justify-content:space-between;
-  flex-wrap:wrap;
-  gap:8px;
-  box-shadow:0 2px 12px rgba(0,0,0,0.15);
-  position:sticky;
-  top:0;
-  z-index:50;
-}
-.header .brand{
-  display:flex;align-items:center;gap:10px;
-  font-weight:700;font-size:18px;
-}
-.header .brand .dot{
-  width:34px;height:34px;border-radius:10px;
-  background:rgba(255,255,255,0.12);
-  display:flex;align-items:center;justify-content:center;
-  font-size:18px;
-}
-.header .meta{
-  display:flex;align-items:center;gap:14px;
-  font-size:13px;color:#cbd5e1;
-}
-.header .meta a{color:#cbd5e1;text-decoration:none;}
-.header .meta a:hover{color:#fff;}
-
-.container{
-  max-width:900px;
-  margin:0 auto;
-  padding:16px 15px 60px;
-}
-.card{
-  background:var(--card);
-  border-radius:var(--radius);
-  box-shadow:var(--shadow);
-  padding:20px;
-  margin-bottom:18px;
-  border:1px solid var(--border);
-}
-.card h2{
-  font-size:16px;
-  margin:0 0 14px 0;
-  display:flex;align-items:center;gap:8px;
-  color:var(--navy);
-}
-.input-field{
-  width:100%;
-  padding:13px 14px;
-  border-radius:10px;
-  border:1.5px solid var(--border);
-  font-size:16px;
-  font-family:inherit;
-  margin-bottom:12px;
-  min-height:48px;
-  transition:border-color .2s;
-}
-.input-field:focus{outline:none;border-color:var(--blue);}
-
-.article-grid{
-  display:grid;
-  grid-template-columns:1fr;
-  gap:10px;
-  margin-bottom:16px;
-}
-@media(min-width:640px){
-  .article-grid{grid-template-columns:repeat(3,1fr);}
-}
-.article-chip{
-  border:1.5px solid var(--border);
-  background:#f8fafc;
-  border-radius:10px;
-  padding:14px 12px;
-  min-height:48px;
-  display:flex;
-  align-items:center;
-  gap:10px;
-  cursor:pointer;
-  font-size:14px;
-  font-weight:600;
-  transition:all .2s;
-  user-select:none;
-}
-.article-chip:hover{border-color:var(--blue);background:#eff6ff;}
-.article-chip.selected{
-  border-color:var(--blue);
-  background:#dbeafe;
-  color:var(--blue-dark);
-  box-shadow:0 2px 8px rgba(37,99,235,0.2);
-}
-.article-chip .box{
-  width:18px;height:18px;border-radius:5px;
-  border:2px solid #cbd5e1;flex:none;
-  display:flex;align-items:center;justify-content:center;
-  background:#fff;font-size:11px;
-}
-.article-chip.selected .box{
-  background:var(--blue);border-color:var(--blue);color:#fff;
-}
-
-.btn{
-  display:flex;align-items:center;justify-content:center;gap:8px;
-  width:100%;
-  min-height:48px;
-  border:none;
-  border-radius:10px;
-  font-size:16px;
-  font-weight:700;
-  font-family:inherit;
-  cursor:pointer;
-  transition:transform .15s, box-shadow .2s, background .2s;
-}
-.btn:active{transform:scale(0.98);}
-.btn-primary{
-  background:linear-gradient(135deg,var(--blue),var(--blue-dark));
-  color:#fff;
-  box-shadow:0 6px 18px rgba(37,99,235,0.35);
-}
-.btn-primary:hover{box-shadow:0 8px 22px rgba(37,99,235,0.45);}
-.btn-primary:disabled{
-  background:#94a3b8;box-shadow:none;cursor:not-allowed;
-}
-.btn-danger{
-  background:#fff;
-  color:#dc2626;
-  border:1.5px solid #fecaca;
-}
-.btn-danger:hover{background:#fef2f2;}
-.btn-ghost{
-  background:#f1f5f9;
-  color:var(--navy);
-  border:1.5px solid var(--border);
-}
-.btn-ghost:hover{background:#e2e8f0;}
-.btn-row{display:flex;gap:10px;margin-top:10px;}
-
-.reading-box{
-  background:#fbfdff;
-  border:1.5px solid var(--border);
-  border-radius:12px;
-  padding:20px;
-  font-size:22px;
-  line-height:2;
-  max-height:340px;
-  overflow-y:auto;
-  scroll-behavior:smooth;
-}
-@media(min-width:640px){
-  .reading-box{font-size:24px;}
-}
-@media(min-width:900px){
-  .reading-box{font-size:26px;}
-}
-.reading-box .placeholder{color:var(--muted);font-size:16px;line-height:1.6;}
-.word{
-  transition:all .3s ease;
-  border-radius:5px;
-  padding:1px 2px;
-}
-.word.current{
-  background:#fef9c3;
-}
-.word.read{
-  background:var(--green-bg);
-  color:var(--green);
-  font-weight:700;
-}
-
-.mic-status{
-  display:flex;align-items:center;gap:8px;
-  font-size:13px;color:var(--muted);
-  margin-top:10px;
-}
-.mic-dot{
-  width:9px;height:9px;border-radius:50%;background:#cbd5e1;
-}
-.mic-dot.live{
-  background:#ef4444;
-  animation:pulse 1.2s infinite;
-}
-@keyframes pulse{
-  0%{box-shadow:0 0 0 0 rgba(239,68,68,0.5);}
-  70%{box-shadow:0 0 0 9px rgba(239,68,68,0);}
-  100%{box-shadow:0 0 0 0 rgba(239,68,68,0);}
-}
-
-.result-box{
-  display:none;
-  background:linear-gradient(135deg,#0f2440,var(--navy-light));
-  color:#fff;
-  border-radius:var(--radius);
-  padding:22px;
-  box-shadow:0 14px 34px rgba(15,36,64,0.35);
-}
-.result-box.show{display:block;animation:fadeUp .4s ease;}
-@keyframes fadeUp{
-  from{opacity:0;transform:translateY(10px);}
-  to{opacity:1;transform:translateY(0);}
-}
-.result-box h2{color:#fff;}
-.result-grid{
-  display:grid;
-  grid-template-columns:repeat(3,1fr);
-  gap:10px;
-  text-align:center;
-}
-.result-grid .stat-value{font-size:26px;font-weight:800;}
-.result-grid .stat-label{font-size:12px;color:#cbd5e1;margin-top:2px;}
-.rank-badge{
-  display:inline-flex;align-items:center;justify-content:center;
-  width:44px;height:44px;border-radius:50%;
-  font-size:20px;font-weight:800;
-  background:#facc15;color:#78350f;
-}
-
-.empty-state{
-  text-align:center;color:var(--muted);
-  padding:30px 10px;font-size:14px;
-}
-
-/* ------- Trang Admin ------- */
-.admin-list{display:flex;flex-direction:column;gap:12px;}
-.admin-item{
-  border:1.5px solid var(--border);
-  border-radius:12px;
-  padding:14px;
-  background:#f8fafc;
-}
-.admin-item .src{
-  font-size:12px;color:var(--blue-dark);font-weight:700;
-  text-transform:uppercase;letter-spacing:.03em;
-}
-.admin-item h3{margin:6px 0;font-size:15px;color:var(--navy);}
-.admin-item p{margin:0 0 10px 0;font-size:13.5px;color:var(--muted);}
-.admin-item .btn{width:auto;padding:0 18px;}
-.toast{
-  position:fixed;bottom:20px;left:50%;transform:translateX(-50%);
-  background:var(--navy);color:#fff;padding:12px 20px;border-radius:10px;
-  font-size:14px;box-shadow:0 10px 25px rgba(0,0,0,0.25);
-  opacity:0;pointer-events:none;transition:opacity .3s, transform .3s;
-  z-index:200;
-}
-.toast.show{opacity:1;transform:translateX(-50%) translateY(-6px);}
-.spinner{
-  width:16px;height:16px;border-radius:50%;
-  border:2.5px solid rgba(255,255,255,0.4);border-top-color:#fff;
-  animation:spin .7s linear infinite;
-}
-@keyframes spin{to{transform:rotate(360deg);}}
+</script>
+<style>
+::-webkit-scrollbar{width:6px;height:6px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:#cbd5e1;border-radius:10px}
+.no-scrollbar::-webkit-scrollbar{display:none}
+.no-scrollbar{-ms-overflow-style:none;scrollbar-width:none}
+@keyframes pulse-ring{0%{transform:scale(.85);opacity:.6}100%{transform:scale(1.4);opacity:0}}
+.pulse-ring::before{content:"";position:absolute;inset:-6px;border-radius:9999px;border:2px solid #2563eb;animation:pulse-ring 2s cubic-bezier(.4,0,.6,1) infinite}
+@keyframes wave{0%{height:14%}100%{height:100%}}
+.wave-bar{animation:wave 1.2s ease-in-out infinite alternate}
+.sidebar-drawer{transform:translateX(-100%);transition:transform .3s ease-in-out}
+.sidebar-drawer.open{transform:translateX(0)}
+.overlay{opacity:0;pointer-events:none;transition:opacity .3s ease-in-out}
+.overlay.show{opacity:1;pointer-events:auto}
+.active-word::after{content:"";position:absolute;bottom:2px;left:0;right:0;height:38%;background:rgba(46,204,113,.25);z-index:-1;border-radius:3px}
+.word-span{transition:all .3s ease;border-radius:4px;padding:1px 2px}
+.word-span.read{background:#dcfce7;color:#15803d;font-weight:700}
+.word-span.current{background:#fef9c3}
+</style>
 """
 
-
-# ============================================================
-# PHẦN 2: FRONTEND - TRANG HỌC SINH  ( / )
-# ============================================================
-
-STUDENT_PAGE = """
-<!DOCTYPE html>
+# ═══════════════════════════════════════════════════════════
+# STUDENT PAGE  ( / )
+# ═══════════════════════════════════════════════════════════
+STUDENT_HTML = """<!DOCTYPE html>
 <html lang="vi">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1">
-<title>AI Speed Reader</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-<style>{{ css }}</style>
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
+<title>AI Speed Reader — Learning Room</title>
+{{ shared_css }}
 </head>
-<body>
+<body class="bg-brand-graybg text-slate-800 font-sans antialiased h-screen overflow-hidden flex">
 
-<div class="header">
-  <div class="brand"><span class="dot">🎙️</span> AI Speed Reader</div>
-  <div class="meta">
-    <span id="studentTag">👤 Học sinh: <b id="studentNameTag">--</b></span>
-    <a href="/admin">⚙️ Admin</a>
-  </div>
-</div>
+<!-- ── MOBILE OVERLAY ── -->
+<div id="overlay" class="overlay fixed inset-0 bg-slate-900/60 z-40" onclick="closeSidebar()"></div>
 
-<div class="container">
+<!-- ══════════ SIDEBAR ══════════ -->
+<aside id="sidebar"
+  class="sidebar-drawer fixed lg:static top-0 left-0 bottom-0 w-[280px] bg-white border-r border-slate-200
+         flex flex-col shrink-0 z-50 shadow-xl lg:shadow-sm lg:translate-x-0">
 
-  <div class="card">
-    <h2>🙋 Thông tin học sinh</h2>
-    <input id="studentName" class="input-field" type="text"
-           placeholder="Nhập tên của bạn (VD: Alex Nguyen)">
-  </div>
-
-  <div class="card">
-    <h2>📚 Chọn bài đọc (Reading Selection)</h2>
-    <div id="articleGrid" class="article-grid">
-      <div class="empty-state">Đang tải danh sách bài báo...</div>
+  <!-- Logo -->
+  <div class="h-20 flex items-center px-8 border-b border-slate-100">
+    <div class="flex items-center gap-3">
+      <div class="relative w-9 h-9 flex items-center justify-center">
+        <svg width="36" height="36" viewBox="0 0 36 36" fill="none" class="absolute inset-0 opacity-30">
+          <circle cx="18" cy="18" r="16" stroke="#2ecc71" stroke-width="4"/>
+        </svg>
+        <div class="flex items-center gap-[3px] h-5 absolute z-10">
+          <span class="w-[2px] bg-brand-emerald rounded-full" style="height:40%"></span>
+          <span class="w-[2px] bg-brand-emerald rounded-full" style="height:100%"></span>
+          <span class="w-[2px] bg-brand-emerald rounded-full" style="height:60%"></span>
+          <span class="w-[2px] bg-brand-emerald rounded-full" style="height:90%"></span>
+        </div>
+      </div>
+      <span class="text-xl font-bold text-slate-900 tracking-tight">SpeedAI</span>
     </div>
-    <button id="btnStart" class="btn btn-primary" disabled>
-      🎤 Bắt đầu đọc (Start Reading)
+  </div>
+
+  <!-- Profile -->
+  <div class="px-8 py-6 border-b border-slate-100">
+    <div class="relative w-16 h-16 mx-auto mb-3 rounded-full overflow-hidden border-2 border-white shadow-md">
+      <img src="https://storage.googleapis.com/uxpilot-auth.appspot.com/avatars/avatar-2.jpg" class="w-full h-full object-cover" alt="">
+    </div>
+    <h3 class="text-center font-semibold text-slate-900 text-sm" id="sidebarName">Student: Alex</h3>
+    <div class="flex justify-center mt-2">
+      <span class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-blue-50 text-brand-blue text-xs font-semibold border border-blue-100">
+        <i class="fa-solid fa-gem text-[10px]"></i> Pro Reader
+      </span>
+    </div>
+  </div>
+
+  <!-- Nav -->
+  <nav class="flex-1 px-5 py-6 space-y-1.5 overflow-y-auto">
+    <a href="#" onclick="showSection('learning');closeSidebar()" 
+       class="nav-link active flex items-center gap-3 px-4 py-3 bg-brand-dark text-white rounded-xl shadow-sm relative">
+      <div class="absolute left-0 top-1/2 -translate-y-1/2 w-1 h-5 bg-brand-emerald rounded-r-md"></div>
+      <div class="w-8 h-8 flex items-center justify-center rounded-lg bg-white/10 text-brand-emerald">
+        <i class="fa-solid fa-book-open-reader text-sm"></i>
+      </div>
+      <span class="font-medium text-sm ml-1">Learning Room</span>
+    </a>
+    <a href="#" onclick="showSection('library');closeSidebar()"
+       class="nav-link flex items-center gap-3 px-4 py-3 text-slate-500 hover:bg-slate-50 hover:text-slate-900 rounded-xl transition-colors">
+      <div class="w-8 h-8 flex items-center justify-center rounded-lg bg-slate-100 text-slate-500">
+        <i class="fa-solid fa-newspaper text-sm"></i>
+      </div>
+      <span class="font-medium text-sm">Article Library</span>
+    </a>
+    <a href="#" onclick="showSection('metrics');closeSidebar()"
+       class="nav-link flex items-center gap-3 px-4 py-3 text-slate-500 hover:bg-slate-50 hover:text-slate-900 rounded-xl transition-colors">
+      <div class="w-8 h-8 flex items-center justify-center rounded-lg bg-slate-100 text-slate-500">
+        <i class="fa-solid fa-chart-line text-sm"></i>
+      </div>
+      <span class="font-medium text-sm">Performance Metrics</span>
+    </a>
+    <a href="/admin"
+       class="flex items-center gap-3 px-4 py-3 text-slate-500 hover:bg-slate-50 hover:text-slate-900 rounded-xl transition-colors">
+      <div class="w-8 h-8 flex items-center justify-center rounded-lg bg-slate-100 text-slate-500">
+        <i class="fa-solid fa-sliders text-sm"></i>
+      </div>
+      <span class="font-medium text-sm">Admin Panel</span>
+    </a>
+  </nav>
+
+  <!-- Daily Streak -->
+  <div class="p-5 border-t border-slate-100">
+    <div class="rounded-2xl bg-slate-50 p-4 border border-slate-100">
+      <div class="flex items-center gap-2 text-sm font-semibold text-slate-800 mb-3">
+        <i class="fa-solid fa-fire text-orange-400"></i> Daily Streak: <span id="streakCount">0</span>
+      </div>
+      <div class="flex justify-between items-center mb-2">
+        <span class="text-xs text-slate-500">Weekly goal</span>
+        <span class="text-xs font-bold text-brand-blue" id="goalPct">0%</span>
+      </div>
+      <div class="w-full bg-slate-200 rounded-full h-1.5">
+        <div class="bg-brand-blue h-1.5 rounded-full transition-all" id="goalBar" style="width:0%"></div>
+      </div>
+    </div>
+  </div>
+</aside>
+
+<!-- ══════════ MAIN ══════════ -->
+<main class="flex-1 flex flex-col min-w-0 overflow-hidden">
+
+  <!-- Top toolbar -->
+  <header class="h-20 px-4 lg:px-8 flex items-center justify-between border-b border-slate-200 bg-white shrink-0">
+    <div class="flex items-center gap-3">
+      <!-- Hamburger (mobile) -->
+      <button onclick="openSidebar()" class="lg:hidden w-10 h-10 flex items-center justify-center rounded-xl bg-slate-50 border border-slate-200 text-slate-600">
+        <i class="fa-solid fa-bars-staggered"></i>
+      </button>
+      <div class="relative flex-1 max-w-[400px] hidden md:block">
+        <i class="fa-solid fa-magnifying-glass absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 text-sm"></i>
+        <input id="searchInput" type="text" placeholder="Search articles, topics..."
+               class="w-full pl-11 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-brand-blue/20 placeholder:text-slate-400">
+      </div>
+    </div>
+    <div class="flex items-center gap-2 lg:gap-3">
+      <!-- Student name input -->
+      <div class="relative">
+        <i class="fa-solid fa-user absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-xs"></i>
+        <input id="studentName" type="text" placeholder="Tên học sinh..." maxlength="40"
+               class="pl-8 pr-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm w-32 lg:w-44 focus:outline-none focus:ring-2 focus:ring-brand-blue/20"
+               oninput="updateStudentUI()">
+      </div>
+      <button onclick="window.location='/admin'" class="flex items-center gap-2 px-3 py-2.5 bg-white border border-slate-200 rounded-xl text-sm font-medium text-slate-700 hover:bg-slate-50 transition-colors hidden lg:flex">
+        <i class="fa-solid fa-gear text-slate-400"></i> Admin
+      </button>
+    </div>
+  </header>
+
+  <!-- Scrollable content -->
+  <div class="flex-1 overflow-y-auto p-4 lg:p-8" id="mainScroll">
+    <div class="max-w-[1400px] mx-auto space-y-6">
+
+      <!-- ── SECTION: LEARNING ROOM ── -->
+      <div id="section-learning">
+
+        <!-- HERO BANNER (12-col grid) -->
+        <section class="grid grid-cols-12 gap-5 mb-6">
+          <!-- WPM Baseline -->
+          <div class="col-span-12 lg:col-span-7 bg-brand-dark rounded-3xl p-7 relative overflow-hidden flex flex-col justify-between min-h-[200px]">
+            <div class="absolute top-0 right-0 w-64 h-64 bg-brand-blue/20 blur-[60px] rounded-full pointer-events-none"></div>
+            <div class="relative z-10">
+              <div class="flex items-center gap-2 text-brand-emerald text-xs font-bold tracking-widest uppercase mb-3">
+                <i class="fa-solid fa-bolt"></i> Your Baseline
+              </div>
+              <div class="flex items-baseline gap-3">
+                <h1 class="text-5xl lg:text-6xl font-extrabold text-white leading-none" id="heroWpm">--</h1>
+                <span class="text-2xl font-semibold text-slate-400">WPM</span>
+              </div>
+              <p class="text-slate-400 text-sm mt-3 max-w-sm" id="heroSubtitle">
+                Nhập tên và bắt đầu luyện đọc để xem kết quả của bạn.
+              </p>
+            </div>
+            <button onclick="document.getElementById('studentName').focus()"
+                    class="relative z-10 self-start mt-5 px-5 py-2.5 bg-brand-blue hover:bg-blue-600 text-white rounded-xl text-sm font-semibold transition-colors">
+              Configure Calibration <i class="fa-solid fa-chevron-right text-xs ml-1"></i>
+            </button>
+          </div>
+
+          <!-- Word Retention Bar Chart -->
+          <div class="col-span-12 lg:col-span-5 bg-white rounded-3xl p-6 border border-slate-100 shadow-sm flex flex-col">
+            <div class="flex items-center justify-between mb-1">
+              <h3 class="font-semibold text-slate-900">Word Retention Rate</h3>
+              <span class="text-xs font-semibold text-brand-emerald bg-emerald-50 px-2 py-0.5 rounded-md" id="retentionDelta">+0%</span>
+            </div>
+            <p class="text-xs text-slate-400 mb-3">Last 7 sessions</p>
+            <div class="flex-1 flex items-end gap-2 pt-2" id="retentionBars">
+              <!-- bars rendered by JS -->
+            </div>
+          </div>
+        </section>
+
+        <!-- READING AREA + RIGHT PANEL -->
+        <section class="grid grid-cols-12 gap-5 mb-6">
+
+          <!-- Reading Pane (8 cols) -->
+          <div class="col-span-12 lg:col-span-8 bg-white rounded-3xl p-6 border border-slate-100 shadow-sm flex flex-col">
+            <!-- Article header -->
+            <div class="flex items-start justify-between mb-5">
+              <div id="articleHeader">
+                <div class="flex items-center gap-2 mb-1">
+                  <span class="text-[10px] font-bold text-white bg-red-500 px-2 py-0.5 rounded" id="articleSource">--</span>
+                  <span class="text-[10px] font-semibold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded" id="articleDifficulty">Easy</span>
+                </div>
+                <h3 class="text-base lg:text-lg font-bold text-slate-900" id="articleTitle">Chọn một bài báo bên dưới để bắt đầu</h3>
+              </div>
+              <div class="flex items-center gap-3 text-slate-400 shrink-0 ml-2">
+                <button class="hover:text-slate-700 transition-colors" title="Font size" onclick="cycleFontSize()"><i class="fa-solid fa-font text-lg"></i></button>
+                <button class="hover:text-slate-700 transition-colors" title="Focus mode" onclick="toggleFocus()"><i class="fa-solid fa-glasses text-lg"></i></button>
+              </div>
+            </div>
+
+            <!-- Text area -->
+            <div id="readingPane" class="overflow-y-auto pr-1 no-scrollbar flex-1" style="height:320px;">
+              <p class="font-serif text-[20px] lg:text-[22px] leading-[2.1] text-slate-700" id="readingText">
+                <span class="text-slate-400 text-base">Hãy chọn một bài báo từ danh sách bên dưới, sau đó nhấn nút microphone màu xanh để bắt đầu luyện đọc. Văn bản sẽ hiển thị tại đây và từ nào bạn đọc đúng sẽ tự động chuyển sang màu xanh lá.</span>
+              </p>
+            </div>
+
+            <!-- Controls -->
+            <div class="mt-5 flex items-center justify-center gap-6 pt-2 border-t border-slate-50">
+              <button id="btnPrev" onclick="prevArticle()"
+                      class="w-12 h-12 rounded-full bg-slate-100 text-slate-500 hover:bg-slate-200 hover:text-slate-700 flex items-center justify-center transition-colors">
+                <i class="fa-solid fa-backward-step text-sm"></i>
+              </button>
+              <!-- MIC BUTTON -->
+              <button id="btnMic" onclick="toggleReading()"
+                      class="relative w-20 h-20 rounded-full bg-brand-blue text-white flex items-center justify-center shadow-lg shadow-blue-500/30 pulse-ring hover:bg-blue-600 transition-colors">
+                <i class="fa-solid fa-microphone text-3xl" id="micIcon"></i>
+              </button>
+              <button id="btnNext" onclick="nextArticle()"
+                      class="w-12 h-12 rounded-full bg-slate-100 text-slate-500 hover:bg-slate-200 hover:text-slate-700 flex items-center justify-center transition-colors">
+                <i class="fa-solid fa-forward-step text-sm"></i>
+              </button>
+              <div class="pl-2">
+                <p class="text-sm font-bold text-slate-900" id="micLabel">START READING</p>
+                <p class="text-xs text-slate-400" id="micSub">Voice tracking active</p>
+              </div>
+            </div>
+          </div>
+
+          <!-- Right column (4 cols) -->
+          <div class="col-span-12 lg:col-span-4 space-y-5">
+
+            <!-- Audio Speed Slider -->
+            <div class="bg-white rounded-3xl p-6 border border-slate-100 shadow-sm">
+              <div class="flex items-center justify-between mb-5">
+                <h3 class="font-semibold text-slate-900 text-sm">Audio Speed</h3>
+                <span class="text-xs font-bold text-brand-blue bg-blue-50 px-2 py-0.5 rounded-md" id="speedLabel">420 WPM</span>
+              </div>
+              <!-- Track -->
+              <div class="relative h-10 mb-2">
+                <div class="absolute top-1/2 -translate-y-1/2 left-0 right-0 h-1.5 bg-slate-100 rounded-full"></div>
+                <div class="absolute top-1/2 -translate-y-1/2 left-0 h-1.5 bg-brand-emerald rounded-full transition-all" id="speedFill" style="width:52%"></div>
+                <input type="range" min="100" max="800" value="420" step="10" id="speedSlider"
+                       oninput="updateSpeed(this.value)"
+                       class="absolute inset-0 w-full opacity-0 cursor-pointer h-full">
+                <div class="absolute top-1/2 -translate-y-1/2 w-5 h-5 bg-white border-2 border-brand-emerald rounded-full shadow-sm pointer-events-none flex items-center justify-center transition-all" id="speedThumb" style="left:calc(52% - 10px)">
+                  <div class="w-2 h-2 bg-brand-emerald rounded-full"></div>
+                </div>
+              </div>
+              <div class="flex justify-between text-[10px] text-slate-400 font-medium mb-5">
+                <span>100</span><span>300</span><span>500</span><span>700</span><span>800</span>
+              </div>
+              <!-- Waveform visualizer -->
+              <div class="flex items-center justify-center gap-[3px] h-10 px-2" id="waveform">
+                <!-- bars rendered by JS -->
+              </div>
+            </div>
+
+            <!-- Metrics (3 cards) -->
+            <div class="grid grid-cols-3 gap-3">
+              <div class="bg-white rounded-3xl p-4 border border-slate-100 shadow-sm flex flex-col">
+                <div class="w-8 h-8 rounded-xl bg-slate-50 border border-slate-100 flex items-center justify-center text-slate-500 mb-2">
+                  <i class="fa-solid fa-gauge-high text-xs"></i>
+                </div>
+                <p class="text-[10px] text-slate-400 mb-1">Speed</p>
+                <p class="text-base font-bold text-slate-900"><span id="metricWpm">--</span> <span class="text-[10px] font-medium text-slate-400">WPM</span></p>
+                <div class="mt-auto pt-2 flex items-center gap-1 text-brand-emerald text-[10px] font-bold">
+                  <i class="fa-solid fa-arrow-trend-up"></i> <span id="metricWpmDelta">--</span>
+                </div>
+              </div>
+              <div class="bg-white rounded-3xl p-4 border border-slate-100 shadow-sm flex flex-col">
+                <div class="w-8 h-8 rounded-xl bg-slate-50 border border-slate-100 flex items-center justify-center text-slate-500 mb-2">
+                  <i class="fa-solid fa-bullseye text-xs"></i>
+                </div>
+                <p class="text-[10px] text-slate-400 mb-1">Accuracy</p>
+                <p class="text-base font-bold text-slate-900"><span id="metricAcc">--</span><span class="text-[10px] font-medium text-slate-400">%</span></p>
+                <div class="mt-auto pt-2 flex items-center gap-1 text-brand-emerald text-[10px] font-bold">
+                  <i class="fa-solid fa-arrow-trend-up"></i> <span id="metricAccDelta">--</span>
+                </div>
+              </div>
+              <div class="bg-white rounded-3xl p-4 border border-slate-100 shadow-sm flex flex-col items-center justify-center">
+                <div class="w-14 h-14 rounded-full bg-emerald-50 flex items-center justify-center mb-1">
+                  <span class="text-3xl font-extrabold text-brand-emerald" id="metricRank">--</span>
+                </div>
+                <p class="text-[10px] text-slate-400 font-medium">Grade Rank</p>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- RECOMMENDED ARTICLES -->
+        <section class="mb-6">
+          <div class="flex items-center justify-between mb-5">
+            <h2 class="text-xl font-bold text-slate-900">Recommended Articles</h2>
+            <a href="#" onclick="showSection('library');return false" class="text-sm font-semibold text-brand-blue hover:underline">
+              View library <i class="fa-solid fa-chevron-right text-xs ml-1"></i>
+            </a>
+          </div>
+          <div id="articleGrid" class="grid grid-cols-2 lg:grid-cols-4 gap-4">
+            <div class="col-span-2 lg:col-span-4 text-center text-slate-400 py-10">
+              <i class="fa-solid fa-spinner fa-spin text-2xl mb-2"></i>
+              <p class="text-sm">Đang tải bài báo...</p>
+            </div>
+          </div>
+        </section>
+      </div><!-- /section-learning -->
+
+      <!-- ── SECTION: LIBRARY ── -->
+      <div id="section-library" class="hidden">
+        <div class="flex items-center justify-between mb-6">
+          <h2 class="text-2xl font-bold text-slate-900">Article Library</h2>
+          <span class="text-sm text-slate-400" id="libraryCount">-- bài báo</span>
+        </div>
+        <div id="libraryGrid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+        </div>
+      </div>
+
+      <!-- ── SECTION: METRICS ── -->
+      <div id="section-metrics" class="hidden">
+        <h2 class="text-2xl font-bold text-slate-900 mb-6">Performance Metrics</h2>
+        <div id="metricsHistory" class="space-y-4">
+          <div class="bg-white rounded-2xl p-8 border border-slate-100 shadow-sm text-center text-slate-400">
+            <i class="fa-solid fa-chart-line text-4xl mb-3 text-slate-200"></i>
+            <p class="font-medium">Chưa có dữ liệu luyện tập.</p>
+            <p class="text-sm mt-1">Hãy hoàn thành ít nhất 1 bài đọc để xem thống kê.</p>
+          </div>
+        </div>
+      </div>
+
+    </div><!-- /max-w -->
+  </div><!-- /scroll -->
+
+  <!-- MOBILE BOTTOM NAV -->
+  <nav class="lg:hidden fixed bottom-0 left-0 right-0 h-16 bg-white border-t border-slate-100 flex items-center justify-around px-4 z-30 shadow-[0_-4px_10px_rgba(0,0,0,0.03)]">
+    <button onclick="showSection('learning')" class="bottom-nav-btn flex flex-col items-center gap-1 text-brand-blue">
+      <i class="fa-solid fa-house-chimney text-lg"></i>
+      <span class="text-[9px] font-bold uppercase">Home</span>
     </button>
-    <div class="mic-status">
-      <span id="micDot" class="mic-dot"></span>
-      <span id="micStatusText">Micro chưa hoạt động</span>
-    </div>
-    <div class="btn-row" id="controlRow" style="display:none;">
-      <button id="btnStop" class="btn btn-danger">⏹ Dừng &amp; xem kết quả</button>
-      <button id="btnReset" class="btn btn-ghost">↺ Đọc lại</button>
-    </div>
-  </div>
+    <button onclick="showSection('library')" class="bottom-nav-btn flex flex-col items-center gap-1 text-slate-400">
+      <i class="fa-solid fa-book-open text-lg"></i>
+      <span class="text-[9px] font-bold uppercase">Library</span>
+    </button>
+    <button onclick="showSection('metrics')" class="bottom-nav-btn flex flex-col items-center gap-1 text-slate-400">
+      <i class="fa-solid fa-chart-simple text-lg"></i>
+      <span class="text-[9px] font-bold uppercase">Stats</span>
+    </button>
+    <button onclick="window.location='/admin'" class="flex flex-col items-center gap-1 text-slate-400">
+      <i class="fa-solid fa-gear text-lg"></i>
+      <span class="text-[9px] font-bold uppercase">Admin</span>
+    </button>
+  </nav>
 
-  <div class="card">
-    <h2>📝 Khu vực luyện đọc (Reading Area)</h2>
-    <div id="readingBox" class="reading-box">
-      <div class="placeholder">Hãy chọn một bài báo và nhấn "Bắt đầu đọc" để luyện tập. Văn bản sẽ hiển thị tại đây, từ nào bạn đọc đúng sẽ tự động chuyển sang màu xanh lá.</div>
-    </div>
-  </div>
+</main><!-- /main -->
 
-  <div id="resultBox" class="result-box card">
-    <h2>📊 Kết quả (Results)</h2>
-    <div class="result-grid">
-      <div>
-        <div class="stat-value" id="resWpm">0</div>
-        <div class="stat-label">Tốc độ (WPM)</div>
-      </div>
-      <div>
-        <div class="stat-value" id="resAcc">0%</div>
-        <div class="stat-label">Độ chính xác</div>
-      </div>
-      <div>
-        <span class="rank-badge" id="resRank">C</span>
-        <div class="stat-label">Xếp hạng</div>
-      </div>
-    </div>
-  </div>
-
-</div>
-
-<div id="toast" class="toast"></div>
+<!-- ══════════ TOAST ══════════ -->
+<div id="toast" class="fixed bottom-20 lg:bottom-6 left-1/2 -translate-x-1/2 bg-brand-dark text-white px-5 py-3 rounded-xl text-sm shadow-xl opacity-0 pointer-events-none transition-all z-[100]"></div>
 
 <script>
-// ============================================================
-// STATE CHUNG CỦA ỨNG DỤNG
-// ============================================================
-let articles = [];
-let selectedArticle = null;
-let words = [];          // mảng các từ (đã làm sạch) của bài đọc
-let matchIndex = 0;      // vị trí từ tiếp theo cần đọc đúng
-let spokenCount = 0;     // tổng số từ đã nhận diện được từ micro
-let correctCount = 0;    // tổng số từ đọc đúng
-let startTime = null;
-let recognition = null;
-let isListening = false;
+// ════════════════════════════════════════════
+// STATE
+// ════════════════════════════════════════════
+let articles      = [];
+let selIdx        = -1;
+let words         = [];
+let matchIdx      = 0;
+let spokenCount   = 0;
+let correctCount  = 0;
+let startTime     = null;
+let recognition   = null;
+let isListening   = false;
+let fontSize      = 22;
+let sessionHistory = JSON.parse(localStorage.getItem('speedai_history') || '[]');
+let streakDays    = parseInt(localStorage.getItem('speedai_streak') || '0');
 
-const $ = (id) => document.getElementById(id);
+const $ = id => document.getElementById(id);
 
+// ── Sidebar ──
+function openSidebar()  { $('sidebar').classList.add('open'); $('overlay').classList.add('show'); }
+function closeSidebar() { $('sidebar').classList.remove('open'); $('overlay').classList.remove('show'); }
+
+// ── Section nav ──
+function showSection(name) {
+  ['learning','library','metrics'].forEach(s => {
+    const el = $('section-' + s);
+    if (el) el.classList.toggle('hidden', s !== name);
+  });
+  if (name === 'library') renderLibrary();
+  if (name === 'metrics') renderMetrics();
+  // Update bottom nav color
+  document.querySelectorAll('.bottom-nav-btn').forEach((b, i) => {
+    b.className = b.className.replace(/text-brand-blue|text-slate-400/g, '');
+    const active = ['learning','library','metrics'][i] === name;
+    b.classList.add(active ? 'text-brand-blue' : 'text-slate-400');
+  });
+}
+
+// ── Student UI ──
+function updateStudentUI() {
+  const name = $('studentName').value.trim() || 'Alex';
+  $('sidebarName').textContent = 'Student: ' + name;
+}
+
+// ── Toast ──
 function showToast(msg) {
-  const t = $("toast");
+  const t = $('toast');
   t.textContent = msg;
-  t.classList.add("show");
-  setTimeout(() => t.classList.remove("show"), 2600);
+  t.style.opacity = '1';
+  setTimeout(() => { t.style.opacity = '0'; }, 2800);
 }
 
-function normalizeWord(w) {
-  return (w || "").toLowerCase().replace(/[^a-z0-9']/g, "");
+// ── Waveform render ──
+function renderWaveform(active = false) {
+  const heights = [30,60,40,80,100,70,50,35,55,25];
+  $('waveform').innerHTML = heights.map((h, i) => `
+    <span class="w-1 rounded-full wave-bar ${active && i>2 && i<7 ? 'bg-brand-emerald' : 'bg-slate-200'}"
+          style="height:${h}%;animation-delay:${i*0.1}s"></span>
+  `).join('');
 }
 
-// ============================================================
-// TẢI DANH SÁCH BÀI BÁO TỪ BACKEND (/api/articles)
-// ============================================================
-async function loadArticles() {
-  try {
-    const res = await fetch("/api/articles");
-    const data = await res.json();
-    articles = data.articles || [];
-  } catch (e) {
-    articles = [];
+// ── Speed slider ──
+function updateSpeed(val) {
+  const pct = ((val - 100) / 700) * 100;
+  $('speedLabel').textContent = val + ' WPM';
+  $('speedFill').style.width = pct + '%';
+  $('speedThumb').style.left = 'calc(' + pct + '% - 10px)';
+}
+
+// ── Font size cycle ──
+function cycleFontSize() {
+  const sizes = [18, 20, 22, 24, 26];
+  const idx = sizes.indexOf(fontSize);
+  fontSize = sizes[(idx + 1) % sizes.length];
+  $('readingText').style.fontSize = fontSize + 'px';
+}
+
+// ── Focus mode ──
+let focusMode = false;
+function toggleFocus() {
+  focusMode = !focusMode;
+  const pane = $('readingPane');
+  pane.style.height = focusMode ? '520px' : '320px';
+}
+
+// ── Retention bar chart ──
+function renderRetentionBars(history) {
+  const days = ['M','T','W','T','F','S','S'];
+  const vals = [40,55,48,88,64,72,96];
+  const colors = [false,false,false,true,false,false,true];
+  $('retentionBars').innerHTML = days.map((d,i) => `
+    <div class="flex-1 flex flex-col items-center gap-1">
+      <div class="w-full ${colors[i] ? 'bg-brand-blue' : 'bg-slate-100'} rounded-t-md transition-all"
+           style="height:${vals[i]}%"></div>
+      <span class="text-[10px] text-slate-400">${d}</span>
+    </div>
+  `).join('');
+
+  if (history.length > 0) {
+    const delta = history.length >= 2
+      ? Math.round(history[history.length-1].accuracy - history[history.length-2].accuracy)
+      : 0;
+    $('retentionDelta').textContent = (delta >= 0 ? '+' : '') + delta + '%';
   }
-  renderArticleGrid();
+}
+
+// ── Article cards ──
+function diffColor(diff) {
+  return { Easy:'emerald', Medium:'yellow', Hard:'amber' }[diff] || 'emerald';
+}
+function sourceBg(src) {
+  const m = { BBC:'bg-red-500', CNN:'bg-red-600', Reuters:'bg-slate-800', NatGeo:'bg-blue-600' };
+  return m[src] || 'bg-slate-700';
+}
+
+function renderArticleCard(a, idx) {
+  const dc = diffColor(a.difficulty || 'Easy');
+  const sb = sourceBg(a.source || '');
+  return `
+    <article onclick="selectArticle(${idx})"
+             class="article-card bg-white rounded-3xl border border-slate-100 shadow-sm overflow-hidden cursor-pointer hover:shadow-md hover:-translate-y-1 transition-all group ${selIdx===idx?'ring-2 ring-brand-blue':''}" data-idx="${idx}">
+      <div class="relative h-36 overflow-hidden">
+        <img src="${a.image || 'https://images.unsplash.com/photo-1451187580459-43490279c0fa?w=600&q=70'}"
+             alt="${a.title}"
+             class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
+             onerror="this.src='https://images.unsplash.com/photo-1451187580459-43490279c0fa?w=600&q=70'">
+        <span class="absolute top-3 left-3 text-[10px] font-bold text-white ${sb} px-2 py-0.5 rounded">${a.source||'--'}</span>
+      </div>
+      <div class="p-4">
+        <div class="flex items-center gap-2 mb-2">
+          <span class="text-[10px] font-semibold text-${dc}-700 bg-${dc}-50 px-2 py-0.5 rounded">${a.difficulty||'Easy'}</span>
+          <span class="text-[10px] text-slate-400">${a.read_time||'5'} min</span>
+        </div>
+        <h4 class="text-sm font-bold text-slate-900 leading-snug mb-1 line-clamp-2">${a.title||''}</h4>
+        <p class="text-xs text-slate-400 line-clamp-1">${(a.content||'').slice(0,80)}...</p>
+      </div>
+    </article>`;
 }
 
 function renderArticleGrid() {
-  const grid = $("articleGrid");
   if (!articles.length) {
-    grid.innerHTML = '<div class="empty-state">Chưa có bài báo nào được duyệt. Vui lòng vào trang Admin để quét &amp; duyệt tin.</div>';
+    $('articleGrid').innerHTML = '<div class="col-span-4 text-center text-slate-400 py-10"><i class="fa-solid fa-newspaper text-2xl mb-2"></i><p class="text-sm">Chưa có bài báo. Admin hãy quét và duyệt bài.</p></div>';
     return;
   }
-  grid.innerHTML = "";
-  articles.forEach((a, idx) => {
-    const chip = document.createElement("div");
-    chip.className = "article-chip";
-    chip.dataset.idx = idx;
-    chip.innerHTML = `<span class="box"></span><span>${escapeHtml(a.source || "Bài đọc")}</span>`;
-    chip.addEventListener("click", () => selectArticle(idx));
-    grid.appendChild(chip);
-  });
+  $('articleGrid').innerHTML = articles.slice(0,4).map((a,i) => renderArticleCard(a,i)).join('');
 }
 
-function escapeHtml(str) {
-  const div = document.createElement("div");
-  div.textContent = str || "";
-  return div.innerHTML;
+function renderLibrary() {
+  if (!articles.length) {
+    $('libraryGrid').innerHTML = '<div class="text-center text-slate-400 py-10 col-span-3"><p>Chưa có bài báo</p></div>';
+    return;
+  }
+  $('libraryCount').textContent = articles.length + ' bài báo';
+  $('libraryGrid').innerHTML = articles.map((a,i) => renderArticleCard(a,i)).join('');
 }
 
 function selectArticle(idx) {
-  selectedArticle = articles[idx];
-  document.querySelectorAll(".article-chip").forEach((el) => {
-    el.classList.toggle("selected", Number(el.dataset.idx) === idx);
-  });
-  document.querySelectorAll(".article-chip .box").forEach((b) => (b.textContent = ""));
-  const selEl = document.querySelector(`.article-chip[data-idx="${idx}"] .box`);
-  if (selEl) selEl.textContent = "✓";
-  $("btnStart").disabled = false;
+  selIdx = idx;
+  const a = articles[idx];
+  // Update reading pane header
+  $('articleSource').textContent = a.source || '--';
+  $('articleDifficulty').textContent = a.difficulty || 'Easy';
+  $('articleTitle').textContent = a.title || '';
+  // Render words
+  buildReadingText(a.content || '');
+  // Scroll to reading area on mobile
+  $('section-library').classList.add('hidden');
+  $('section-metrics').classList.add('hidden');
+  $('section-learning').classList.remove('hidden');
+  setTimeout(() => {
+    document.querySelector('section.grid.grid-cols-12.gap-5.mb-6 + section').scrollIntoView({behavior:'smooth',block:'start'});
+  }, 100);
+  renderArticleGrid();
+  showToast('📖 Đã chọn: ' + (a.title||'').slice(0,40) + '...');
 }
 
-// ============================================================
-// KHỞI TẠO WEB SPEECH API (NHẬN DIỆN GIỌNG NÓI)
-// ============================================================
-function getSpeechRecognition() {
-  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-  if (!SR) return null;
-  const r = new SR();
-  r.lang = "en-US";
-  r.continuous = true;
-  r.interimResults = true;
-  return r;
+function prevArticle() {
+  if (!articles.length) return;
+  selectArticle((selIdx <= 0 ? articles.length : selIdx) - 1);
+}
+function nextArticle() {
+  if (!articles.length) return;
+  selectArticle((selIdx + 1) % articles.length);
 }
 
-function buildReadingBox() {
-  const box = $("readingBox");
-  box.innerHTML = "";
-  words.forEach((w, i) => {
-    const span = document.createElement("span");
-    span.className = "word";
-    span.id = "word-" + i;
-    span.textContent = w.display + " ";
-    box.appendChild(span);
-  });
-  const first = $("word-0");
-  if (first) first.classList.add("current");
+// ── Reading text ──
+function normalizeWord(w) { return (w||'').toLowerCase().replace(/[^a-z0-9']/g,''); }
+
+function buildReadingText(content) {
+  const rawWords = content.trim().split(/\s+/);
+  words = rawWords.map(w => ({ display: w, clean: normalizeWord(w) })).filter(w => w.clean);
+  matchIdx = 0; spokenCount = 0; correctCount = 0;
+  $('readingText').innerHTML = words.map((w,i) =>
+    `<span class="word-span" id="ws-${i}">${w.display} </span>`
+  ).join('');
+  if (words.length) $('ws-0').classList.add('current');
 }
 
-function markWordRead(i) {
-  const el = $("word-" + i);
+function markWord(i) {
+  const el = $('ws-' + i);
   if (!el) return;
-  el.classList.remove("current");
-  el.classList.add("read");
-  el.scrollIntoView({ behavior: "smooth", block: "center" });
-  const next = $("word-" + (i + 1));
-  if (next) next.classList.add("current");
+  el.classList.remove('current');
+  el.classList.add('read');
+  el.scrollIntoView({ behavior:'smooth', block:'center' });
+  const next = $('ws-' + (i+1));
+  if (next) next.classList.add('current');
 }
 
-// ============================================================
-// XỬ LÝ SỰ KIỆN NHẬN DIỆN GIỌNG NÓI -> SO KHỚP TỪNG TỪ
-// ============================================================
-function handleRecognitionResult(event) {
-  let transcript = "";
-  for (let i = event.resultIndex; i < event.results.length; i++) {
-    transcript += " " + event.results[i][0].transcript;
+// ── Speech recognition ──
+function toggleReading() {
+  if (!articles.length || selIdx < 0) {
+    showToast('⚠️ Hãy chọn một bài báo trước!');
+    return;
   }
-  const spokenWords = transcript.trim().split(/\\s+/).map(normalizeWord).filter(Boolean);
-
-  spokenWords.forEach((sw) => {
-    if (matchIndex >= words.length) return;
-    spokenCount++;
-    if (sw === words[matchIndex].clean) {
-      correctCount++;
-      markWordRead(matchIndex);
-      matchIndex++;
-    }
-  });
-
-  if (matchIndex >= words.length) {
-    finishReading();
-  }
+  const name = $('studentName').value.trim();
+  if (!name) { showToast('⚠️ Hãy nhập tên học sinh!'); return; }
+  if (isListening) stopReading(); else startReading();
 }
 
 function startReading() {
-  if (!selectedArticle) return;
-  const studentName = $("studentName").value.trim();
-  if (!studentName) {
-    showToast("⚠️ Vui lòng nhập tên học sinh trước khi bắt đầu.");
-    return;
-  }
-  $("studentNameTag").textContent = studentName;
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR) { showToast('❌ Trình duyệt không hỗ trợ Speech API. Hãy dùng Chrome.'); return; }
+  recognition = new SR();
+  recognition.lang = 'en-US';
+  recognition.continuous = true;
+  recognition.interimResults = true;
 
-  recognition = getSpeechRecognition();
-  if (!recognition) {
-    showToast("❌ Trình duyệt không hỗ trợ Web Speech API. Hãy dùng Chrome trên máy tính hoặc Android.");
-    return;
-  }
-
-  const raw = (selectedArticle.content || "").trim().split(/\\s+/);
-  words = raw.map((w) => ({ display: w, clean: normalizeWord(w) })).filter((w) => w.clean);
-
-  matchIndex = 0;
-  spokenCount = 0;
-  correctCount = 0;
-  buildReadingBox();
-  $("resultBox").classList.remove("show");
-
-  recognition.onresult = handleRecognitionResult;
-  recognition.onerror = (e) => {
-    console.warn("Speech recognition error:", e.error);
+  recognition.onresult = e => {
+    let transcript = '';
+    for (let i = e.resultIndex; i < e.results.length; i++)
+      transcript += ' ' + e.results[i][0].transcript;
+    transcript.trim().split(/\s+/).map(normalizeWord).filter(Boolean).forEach(sw => {
+      if (matchIdx >= words.length) return;
+      spokenCount++;
+      if (sw === words[matchIdx].clean) { correctCount++; markWord(matchIdx); matchIdx++; }
+    });
+    if (matchIdx >= words.length) finishReading();
   };
-  recognition.onend = () => {
-    isListening = false;
-    $("micDot").classList.remove("live");
-    $("micStatusText").textContent = "Micro đã dừng";
-  };
-
+  recognition.onerror = () => {};
+  recognition.onend = () => { isListening = false; updateMicUI(false); };
   recognition.start();
   isListening = true;
   startTime = performance.now();
-  $("micDot").classList.add("live");
-  $("micStatusText").textContent = "Đang nghe... hãy đọc to bài báo";
-  $("btnStart").disabled = true;
-  $("controlRow").style.display = "flex";
+  updateMicUI(true);
+  renderWaveform(true);
 }
 
-function stopRecognition() {
-  if (recognition && isListening) {
-    recognition.stop();
-  }
+function stopReading() {
+  if (recognition && isListening) { recognition.stop(); }
+  finishReading();
 }
 
 function finishReading() {
-  stopRecognition();
-  const elapsedMinutes = Math.max((performance.now() - startTime) / 60000, 0.05);
-  const wpm = Math.round(matchIndex / elapsedMinutes);
+  if (recognition) { try { recognition.stop(); } catch(e){} }
+  isListening = false;
+  updateMicUI(false);
+  renderWaveform(false);
+  if (!startTime) return;
+
+  const elapsed = Math.max((performance.now() - startTime) / 60000, 0.05);
+  const wpm = Math.round(matchIdx / elapsed);
   const accuracy = spokenCount > 0 ? Math.round((correctCount / spokenCount) * 100) : 0;
   const rank = calcRank(wpm, accuracy);
 
-  $("resWpm").textContent = wpm;
-  $("resAcc").textContent = accuracy + "%";
-  const rankEl = $("resRank");
-  rankEl.textContent = rank;
-  rankEl.style.background = rankColor(rank);
-  $("resultBox").classList.add("show");
-  $("resultBox").scrollIntoView({ behavior: "smooth", block: "center" });
-  $("btnStart").disabled = false;
-  $("controlRow").style.display = "none";
+  // Update metrics panel
+  $('metricWpm').textContent = wpm;
+  $('metricAcc').textContent = accuracy;
+  $('metricRank').textContent = rank;
+  $('metricRank').className = 'text-3xl font-extrabold ' + rankColor(rank);
+  $('metricWpmDelta').textContent = '+' + wpm;
+  $('metricAccDelta').textContent = '+' + accuracy + '%';
 
+  // Update hero
+  $('heroWpm').textContent = wpm;
+  $('heroSubtitle').textContent = `Độ chính xác ${accuracy}% • Xếp hạng ${rank} • Đọc xong ${matchIdx} từ`;
+
+  // Save history
+  const record = { wpm, accuracy, rank, title: articles[selIdx]?.title || '', date: new Date().toISOString() };
+  sessionHistory.push(record);
+  localStorage.setItem('speedai_history', JSON.stringify(sessionHistory.slice(-50)));
+
+  // Streak
+  streakDays++;
+  localStorage.setItem('speedai_streak', streakDays);
+  $('streakCount').textContent = streakDays;
+  const goalPct = Math.min(100, Math.round((streakDays % 7) / 7 * 100));
+  $('goalPct').textContent = goalPct + '%';
+  $('goalBar').style.width = goalPct + '%';
+
+  renderRetentionBars(sessionHistory);
+  showToast(`✅ Kết quả: ${wpm} WPM | ${accuracy}% | Rank ${rank}`);
+
+  // Save to API
   saveScore(wpm, accuracy, rank);
+  startTime = null;
 }
 
-function calcRank(wpm, accuracy) {
-  if (accuracy >= 95 && wpm >= 130) return "S";
-  if (accuracy >= 90 && wpm >= 100) return "A";
-  if (accuracy >= 80 && wpm >= 70) return "B";
-  return "C";
+function updateMicUI(active) {
+  const btn = $('btnMic');
+  if (active) {
+    btn.classList.replace('bg-brand-blue','bg-red-500');
+    btn.classList.replace('shadow-blue-500/30','shadow-red-500/30');
+    $('micIcon').className = 'fa-solid fa-stop text-3xl';
+    $('micLabel').textContent = 'STOP READING';
+    $('micSub').textContent = 'Đang nghe... đọc to bài báo';
+  } else {
+    btn.classList.replace('bg-red-500','bg-brand-blue');
+    btn.classList.replace('shadow-red-500/30','shadow-blue-500/30');
+    $('micIcon').className = 'fa-solid fa-microphone text-3xl';
+    $('micLabel').textContent = 'START READING';
+    $('micSub').textContent = 'Voice tracking active';
+  }
 }
 
+function calcRank(wpm, acc) {
+  if (acc >= 95 && wpm >= 130) return 'S';
+  if (acc >= 90 && wpm >= 100) return 'A';
+  if (acc >= 80 && wpm >= 70)  return 'B';
+  return 'C';
+}
 function rankColor(rank) {
-  return { S: "#facc15", A: "#4ade80", B: "#60a5fa", C: "#f87171" }[rank] || "#facc15";
+  return { S:'text-brand-emerald', A:'text-blue-500', B:'text-yellow-500', C:'text-red-400' }[rank] || 'text-brand-emerald';
 }
 
 async function saveScore(wpm, accuracy, rank) {
   try {
-    await fetch("/api/save_score", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
+    await fetch('/api/save_score', {
+      method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({
-        student_name: $("studentName").value.trim(),
-        article_title: selectedArticle.title || selectedArticle.source,
-        wpm, accuracy, rank,
-      }),
+        student_name: $('studentName').value.trim() || 'Anonymous',
+        article_title: articles[selIdx]?.title || '',
+        wpm, accuracy, rank
+      })
     });
-  } catch (e) {
-    console.warn("Không thể lưu điểm:", e);
-  }
+  } catch(e) {}
 }
 
-function resetReading() {
-  stopRecognition();
-  words = [];
-  matchIndex = 0;
-  $("readingBox").innerHTML = '<div class="placeholder">Hãy chọn một bài báo và nhấn "Bắt đầu đọc" để luyện tập.</div>';
-  $("resultBox").classList.remove("show");
-  $("controlRow").style.display = "none";
-  $("btnStart").disabled = !selectedArticle;
-  $("micStatusText").textContent = "Micro chưa hoạt động";
+// ── Metrics history ──
+function renderMetrics() {
+  if (!sessionHistory.length) return;
+  $('metricsHistory').innerHTML = sessionHistory.slice().reverse().slice(0,10).map((h,i) => `
+    <div class="bg-white rounded-2xl p-5 border border-slate-100 shadow-sm flex items-center gap-5">
+      <div class="w-14 h-14 rounded-full bg-emerald-50 flex items-center justify-center shrink-0">
+        <span class="text-2xl font-extrabold ${rankColor(h.rank)}">${h.rank}</span>
+      </div>
+      <div class="flex-1 min-w-0">
+        <p class="font-semibold text-slate-900 text-sm truncate">${h.title || 'Bài luyện tập'}</p>
+        <p class="text-xs text-slate-400 mt-0.5">${new Date(h.date).toLocaleString('vi-VN')}</p>
+      </div>
+      <div class="text-right shrink-0">
+        <p class="text-lg font-extrabold text-slate-900">${h.wpm} <span class="text-xs text-slate-400 font-normal">WPM</span></p>
+        <p class="text-xs text-brand-emerald font-bold">${h.accuracy}% accuracy</p>
+      </div>
+    </div>
+  `).join('');
 }
 
-$("btnStart").addEventListener("click", startReading);
-$("btnStop").addEventListener("click", finishReading);
-$("btnReset").addEventListener("click", resetReading);
+// ── Load articles ──
+async function loadArticles() {
+  try {
+    const res = await fetch('/api/articles');
+    const data = await res.json();
+    articles = data.articles || [];
+  } catch(e) { articles = []; }
+  renderArticleGrid();
+}
 
+// ── INIT ──
+renderWaveform(false);
+renderRetentionBars([]);
+updateSpeed(420);
 loadArticles();
+
+const storedStreak = parseInt(localStorage.getItem('speedai_streak') || '0');
+$('streakCount').textContent = storedStreak;
+const gp = Math.min(100, Math.round((storedStreak % 7) / 7 * 100));
+$('goalPct').textContent = gp + '%';
+$('goalBar').style.width = gp + '%';
+
+const hist = JSON.parse(localStorage.getItem('speedai_history') || '[]');
+if (hist.length) {
+  const last = hist[hist.length-1];
+  $('heroWpm').textContent = last.wpm;
+  $('metricWpm').textContent = last.wpm;
+  $('metricAcc').textContent = last.accuracy;
+  $('metricRank').textContent = last.rank;
+  renderRetentionBars(hist);
+}
 </script>
 </body>
-</html>
-"""
+</html>"""
 
-
-# ============================================================
-# PHẦN 2: FRONTEND - TRANG ADMIN  ( /admin )
-# ============================================================
-
-ADMIN_PAGE = """
-<!DOCTYPE html>
+# ═══════════════════════════════════════════════════════════
+# ADMIN PAGE  ( /admin )
+# ═══════════════════════════════════════════════════════════
+ADMIN_HTML = """<!DOCTYPE html>
 <html lang="vi">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1">
-<title>AI Speed Reader - Admin</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-<style>{{ css }}</style>
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
+<title>AI Speed Reader — Admin</title>
+{{ shared_css }}
 </head>
-<body>
+<body class="bg-brand-graybg text-slate-800 font-sans antialiased h-screen overflow-hidden flex">
 
-<div class="header">
-  <div class="brand"><span class="dot">⚙️</span> AI Speed Reader - Admin</div>
-  <div class="meta"><a href="/">🎙️ Về trang học sinh</a></div>
-</div>
+<!-- Mobile overlay -->
+<div id="overlay" class="overlay fixed inset-0 bg-slate-900/60 z-40" onclick="closeSidebar()"></div>
 
-<div class="container">
+<!-- ══════════ SIDEBAR ══════════ -->
+<aside id="sidebar"
+  class="sidebar-drawer fixed lg:static top-0 left-0 bottom-0 w-[280px] bg-brand-dark
+         flex flex-col shrink-0 z-50 shadow-xl">
 
-  <div class="card">
-    <h2>📰 Quét tin tức quốc tế (RSS)</h2>
-    <p style="color:var(--muted);font-size:13.5px;margin-top:-6px;">
-      Quét từ BBC, CNN, Reuters... để lấy bài báo mới nhất, sau đó chọn bài phù hợp và bấm "Duyệt" để lưu vào Supabase cho học sinh luyện đọc.
-    </p>
-    <button id="btnCrawl" class="btn btn-primary">🔍 Quét tin mới</button>
-  </div>
-
-  <div class="card">
-    <h2>🗂️ Danh sách bài quét được</h2>
-    <div id="crawlList" class="admin-list">
-      <div class="empty-state">Nhấn "Quét tin mới" để bắt đầu.</div>
+  <div class="h-20 flex items-center px-8 border-b border-white/10">
+    <div class="flex items-center gap-3">
+      <div class="w-8 h-8 bg-brand-emerald rounded-lg flex items-center justify-center">
+        <i class="fa-solid fa-bolt text-white text-sm"></i>
+      </div>
+      <span class="text-xl font-bold text-white tracking-tight">
+        SpeedAI <span class="text-[10px] bg-brand-blue px-1.5 py-0.5 rounded ml-1 uppercase">Admin</span>
+      </span>
     </div>
   </div>
 
-</div>
+  <nav class="flex-1 px-5 py-8 space-y-1.5 overflow-y-auto">
+    <div class="px-4 mb-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest">Main Menu</div>
+    <a href="#" class="flex items-center gap-3 px-4 py-3 text-slate-400 hover:bg-white/5 hover:text-white rounded-xl transition-colors">
+      <div class="w-8 h-8 flex items-center justify-center rounded-lg bg-white/5"><i class="fa-solid fa-chart-pie text-sm"></i></div>
+      <span class="font-medium text-sm">Overview</span>
+    </a>
+    <a href="#" class="flex items-center gap-3 px-4 py-3 bg-brand-blue text-white rounded-xl shadow-lg shadow-brand-blue/20">
+      <div class="w-8 h-8 flex items-center justify-center rounded-lg bg-white/20"><i class="fa-solid fa-spider text-sm"></i></div>
+      <span class="font-medium text-sm ml-1">Content Crawler</span>
+    </a>
+    <a href="#" class="flex items-center gap-3 px-4 py-3 text-slate-400 hover:bg-white/5 hover:text-white rounded-xl transition-colors">
+      <div class="w-8 h-8 flex items-center justify-center rounded-lg bg-white/5"><i class="fa-solid fa-users text-sm"></i></div>
+      <span class="font-medium text-sm">User Management</span>
+    </a>
+    <a href="#" class="flex items-center gap-3 px-4 py-3 text-slate-400 hover:bg-white/5 hover:text-white rounded-xl transition-colors">
+      <div class="w-8 h-8 flex items-center justify-center rounded-lg bg-white/5"><i class="fa-solid fa-layer-group text-sm"></i></div>
+      <span class="font-medium text-sm">Learning Materials</span>
+    </a>
+    <div class="px-4 mt-8 mb-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest">Settings</div>
+    <a href="#" class="flex items-center gap-3 px-4 py-3 text-slate-400 hover:bg-white/5 hover:text-white rounded-xl transition-colors">
+      <div class="w-8 h-8 flex items-center justify-center rounded-lg bg-white/5"><i class="fa-solid fa-robot text-sm"></i></div>
+      <span class="font-medium text-sm">AI Engine Config</span>
+    </a>
+  </nav>
 
-<div id="toast" class="toast"></div>
+  <div class="p-5 border-t border-white/10">
+    <div class="flex items-center gap-3 px-2">
+      <img src="https://storage.googleapis.com/uxpilot-auth.appspot.com/avatars/avatar-4.jpg"
+           class="w-10 h-10 rounded-full border border-white/20" alt="">
+      <div>
+        <p class="text-xs font-bold text-white">System Admin</p>
+        <p class="text-[10px] text-slate-500">Master Control</p>
+      </div>
+    </div>
+  </div>
+</aside>
+
+<!-- ══════════ MAIN ══════════ -->
+<main class="flex-1 flex flex-col min-w-0 overflow-hidden">
+
+  <!-- Header -->
+  <header class="h-20 px-4 lg:px-8 flex items-center justify-between border-b border-slate-200 bg-white shrink-0">
+    <div class="flex items-center gap-3">
+      <button onclick="openSidebar()" class="lg:hidden w-10 h-10 flex items-center justify-center rounded-xl bg-slate-50 border border-slate-200 text-slate-600">
+        <i class="fa-solid fa-bars-staggered"></i>
+      </button>
+      <div>
+        <h1 class="text-base lg:text-lg font-bold text-slate-900">Content Crawler Controller</h1>
+        <p class="text-xs text-slate-500 hidden md:block">Manage news ingestion and article approval queue</p>
+      </div>
+    </div>
+    <div class="flex items-center gap-3">
+      <div class="flex items-center gap-2 px-3 py-1.5 bg-emerald-50 text-brand-emerald rounded-lg border border-emerald-100">
+        <span class="w-1.5 h-1.5 bg-brand-emerald rounded-full animate-pulse"></span>
+        <span class="text-[10px] font-bold uppercase tracking-wider hidden sm:block">Crawler Engine Online</span>
+      </div>
+      <a href="/" class="flex items-center gap-2 px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold text-slate-600 hover:bg-slate-100 transition-colors">
+        <i class="fa-solid fa-arrow-left"></i> Student View
+      </a>
+    </div>
+  </header>
+
+  <!-- Content -->
+  <div class="flex-1 overflow-y-auto p-4 lg:p-8">
+    <div class="max-w-[1200px] mx-auto space-y-8">
+
+      <!-- SOURCE CONFIG -->
+      <section class="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm">
+        <div class="flex items-center gap-3 mb-6">
+          <div class="w-10 h-10 rounded-xl bg-blue-50 flex items-center justify-center text-brand-blue">
+            <i class="fa-solid fa-filter text-sm"></i>
+          </div>
+          <h2 class="text-lg font-bold text-slate-900">Source Configuration</h2>
+        </div>
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-5">
+          <div class="space-y-2">
+            <label class="text-xs font-bold text-slate-500 uppercase tracking-wider">Target News Agency</label>
+            <div class="relative">
+              <select id="selSource" class="w-full pl-4 pr-10 py-3 bg-slate-50 border border-slate-200 rounded-xl text-sm appearance-none focus:outline-none focus:ring-2 focus:ring-brand-blue/20">
+                <option>BBC News (Global)</option>
+                <option>CNN International</option>
+                <option>Reuters Technology</option>
+                <option>All Sources</option>
+              </select>
+              <i class="fa-solid fa-chevron-down absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 text-xs pointer-events-none"></i>
+            </div>
+          </div>
+          <div class="space-y-2">
+            <label class="text-xs font-bold text-slate-500 uppercase tracking-wider">Content Category</label>
+            <div class="relative">
+              <select id="selCategory" class="w-full pl-4 pr-10 py-3 bg-slate-50 border border-slate-200 rounded-xl text-sm appearance-none focus:outline-none focus:ring-2 focus:ring-brand-blue/20">
+                <option>Technology & AI</option>
+                <option>Science & Nature</option>
+                <option>Business & Finance</option>
+                <option>World Politics</option>
+              </select>
+              <i class="fa-solid fa-chevron-down absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 text-xs pointer-events-none"></i>
+            </div>
+          </div>
+          <div class="flex items-end">
+            <button id="btnCrawl" onclick="runCrawler()"
+                    class="w-full py-3 bg-brand-blue hover:bg-blue-600 text-white rounded-xl text-sm font-bold shadow-lg shadow-brand-blue/20 transition-all active:scale-[0.98] flex items-center justify-center gap-2">
+              <i class="fa-solid fa-play text-xs"></i> RUN CRAWLER / SCAN NEWS
+            </button>
+          </div>
+        </div>
+      </section>
+
+      <!-- ARTICLE QUEUE -->
+      <section class="space-y-5">
+        <div class="flex items-center justify-between">
+          <div class="flex items-center gap-3">
+            <h2 class="text-xl font-bold text-slate-900">Pending Article Queue</h2>
+            <span id="queueBadge" class="px-2.5 py-0.5 bg-slate-200 text-slate-600 rounded-full text-xs font-bold">0 Articles</span>
+          </div>
+          <div class="flex items-center gap-2">
+            <button onclick="selectAll()" class="px-4 py-2 bg-white border border-slate-200 rounded-xl text-xs font-bold text-slate-600 hover:bg-slate-50 transition-colors">Select All</button>
+            <button onclick="batchApprove()" class="px-4 py-2 bg-brand-emerald text-white rounded-xl text-xs font-bold shadow-md shadow-brand-emerald/20 hover:bg-emerald-600 transition-colors">Batch Approve</button>
+          </div>
+        </div>
+        <div id="queueList" class="space-y-4">
+          <div class="bg-white rounded-2xl p-8 border border-slate-200 text-center text-slate-400">
+            <i class="fa-solid fa-spider text-4xl mb-3 text-slate-200"></i>
+            <p class="font-medium">Nhấn "RUN CRAWLER" để quét tin tức mới.</p>
+          </div>
+        </div>
+      </section>
+
+    </div>
+  </div>
+
+  <!-- Mobile bottom nav -->
+  <nav class="lg:hidden fixed bottom-0 left-0 right-0 h-16 bg-white border-t border-slate-200 flex items-center justify-around px-6 z-30">
+    <a href="#" class="flex flex-col items-center gap-1 text-brand-blue">
+      <i class="fa-solid fa-spider text-lg"></i>
+      <span class="text-[9px] font-bold uppercase">Crawler</span>
+    </a>
+    <a href="#" class="flex flex-col items-center gap-1 text-slate-400">
+      <i class="fa-solid fa-layer-group text-lg"></i>
+      <span class="text-[9px] font-bold uppercase">Library</span>
+    </a>
+    <a href="/" class="flex flex-col items-center gap-1 text-slate-400">
+      <i class="fa-solid fa-users text-lg"></i>
+      <span class="text-[9px] font-bold uppercase">Students</span>
+    </a>
+    <a href="#" class="flex flex-col items-center gap-1 text-slate-400">
+      <i class="fa-solid fa-chart-line text-lg"></i>
+      <span class="text-[9px] font-bold uppercase">Stats</span>
+    </a>
+  </nav>
+</main>
+
+<div id="toast" class="fixed bottom-20 lg:bottom-6 left-1/2 -translate-x-1/2 bg-brand-dark text-white px-5 py-3 rounded-xl text-sm shadow-xl opacity-0 pointer-events-none transition-all z-[100]"></div>
 
 <script>
-const $ = (id) => document.getElementById(id);
-
-function escapeHtml(str) {
-  const div = document.createElement("div");
-  div.textContent = str || "";
-  return div.innerHTML;
-}
+const $ = id => document.getElementById(id);
+function openSidebar()  { $('sidebar').classList.add('open'); $('overlay').classList.add('show'); }
+function closeSidebar() { $('sidebar').classList.remove('open'); $('overlay').classList.remove('show'); }
 
 function showToast(msg) {
-  const t = $("toast");
+  const t = $('toast');
   t.textContent = msg;
-  t.classList.add("show");
-  setTimeout(() => t.classList.remove("show"), 2600);
+  t.style.opacity = '1';
+  setTimeout(() => t.style.opacity = '0', 2800);
 }
 
-async function crawlNews() {
-  const btn = $("btnCrawl");
-  btn.disabled = true;
-  btn.innerHTML = '<span class="spinner"></span> Đang quét...';
-  $("crawlList").innerHTML = '<div class="empty-state">Đang tải dữ liệu từ RSS...</div>';
+function escHtml(s) {
+  const d = document.createElement('div');
+  d.textContent = s || '';
+  return d.innerHTML;
+}
 
+let crawledArticles = [];
+let selected = new Set();
+
+function sourceBgAdmin(src) {
+  const m = { BBC:'bg-red-500', CNN:'bg-red-600', Reuters:'bg-blue-600' };
+  return m[src] || 'bg-slate-700';
+}
+
+async function runCrawler() {
+  const btn = $('btnCrawl');
+  btn.disabled = true;
+  btn.innerHTML = '<i class="fa-solid fa-circle-notch fa-spin text-xs"></i> Đang quét...';
+  $('queueList').innerHTML = '<div class="bg-white rounded-2xl p-8 border border-slate-200 text-center text-slate-400"><i class="fa-solid fa-circle-notch fa-spin text-3xl mb-3"></i><p>Đang tải dữ liệu RSS...</p></div>';
+  selected.clear();
   try {
-    const res = await fetch("/api/crawl", { method: "POST" });
+    const res = await fetch('/api/crawl', { method: 'POST' });
     const data = await res.json();
-    renderCrawlList(data.articles || []);
-    showToast(`✅ Đã quét được ${data.count || 0} bài báo.`);
-  } catch (e) {
-    $("crawlList").innerHTML = '<div class="empty-state">❌ Lỗi khi quét tin. Vui lòng thử lại.</div>';
+    crawledArticles = data.articles || [];
+    $('queueBadge').textContent = crawledArticles.length + ' Articles';
+    renderQueue();
+    showToast('✅ Quét xong ' + crawledArticles.length + ' bài báo');
+  } catch(e) {
+    $('queueList').innerHTML = '<div class="bg-white rounded-2xl p-8 border border-slate-200 text-center text-red-400"><i class="fa-solid fa-triangle-exclamation text-3xl mb-3"></i><p>Lỗi khi quét tin. Kiểm tra kết nối mạng.</p></div>';
   } finally {
     btn.disabled = false;
-    btn.innerHTML = "🔍 Quét tin mới";
+    btn.innerHTML = '<i class="fa-solid fa-play text-xs"></i> RUN CRAWLER / SCAN NEWS';
   }
 }
 
-function renderCrawlList(list) {
-  const box = $("crawlList");
-  if (!list.length) {
-    box.innerHTML = '<div class="empty-state">Không tìm thấy bài báo phù hợp.</div>';
+function renderQueue() {
+  if (!crawledArticles.length) {
+    $('queueList').innerHTML = '<div class="bg-white rounded-2xl p-8 border border-slate-200 text-center text-slate-400"><p>Không tìm thấy bài phù hợp.</p></div>';
     return;
   }
-  box.innerHTML = "";
-  list.forEach((a, idx) => {
-    const item = document.createElement("div");
-    item.className = "admin-item";
-    item.innerHTML = `
-      <div class="src">${escapeHtml(a.source)}</div>
-      <h3>${escapeHtml(a.title)}</h3>
-      <p>${escapeHtml(a.content.slice(0, 180))}...</p>
-      <button class="btn btn-primary" data-idx="${idx}">✅ Duyệt bài này</button>
-    `;
-    item.querySelector("button").addEventListener("click", (e) => approveArticle(a, e.target));
-    box.appendChild(item);
-  });
-  window.__crawledArticles = list;
+  $('queueList').innerHTML = crawledArticles.map((a, idx) => {
+    const sb = sourceBgAdmin(a.source);
+    const dc = { Easy:'emerald', Medium:'yellow', Hard:'amber' }[a.difficulty||'Easy'] || 'emerald';
+    return `
+    <div class="bg-white rounded-2xl p-5 border border-slate-200 shadow-sm flex flex-col md:flex-row items-start gap-5 hover:border-brand-blue/30 transition-colors group article-item" id="item-${idx}">
+      <!-- Checkbox -->
+      <div class="flex items-start gap-4 w-full md:w-auto">
+        <input type="checkbox" onchange="toggleSelect(${idx})" class="mt-1.5 w-4 h-4 rounded text-brand-blue cursor-pointer">
+        <!-- Thumbnail -->
+        <div class="w-full md:w-48 h-32 rounded-xl overflow-hidden shrink-0 bg-slate-100 hidden md:block">
+          <img src="${a.image||'https://images.unsplash.com/photo-1550751827-4bd374c3f58b?w=400&q=70'}"
+               class="w-full h-full object-cover grayscale group-hover:grayscale-0 transition-all duration-500"
+               onerror="this.src='https://images.unsplash.com/photo-1550751827-4bd374c3f58b?w=400&q=70'" alt="">
+        </div>
+      </div>
+      <!-- Info -->
+      <div class="flex-1 min-w-0 py-0.5 w-full">
+        <div class="flex items-center gap-3 mb-2">
+          <span class="px-2 py-0.5 ${sb} text-white text-[10px] font-bold rounded">${escHtml(a.source)}</span>
+          <span class="text-[10px] font-bold text-${dc}-700 bg-${dc}-50 px-2 py-0.5 rounded">${a.difficulty||'Easy'}</span>
+          <span class="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Crawled just now</span>
+        </div>
+        <h3 class="text-base font-bold text-slate-900 mb-2 leading-tight">${escHtml(a.title)}</h3>
+        <p class="text-sm text-slate-500 line-clamp-2 leading-relaxed mb-3">${escHtml((a.content||'').slice(0,200))}...</p>
+        <div class="flex items-center gap-4">
+          <div class="flex items-center gap-1.5 text-xs text-slate-400"><i class="fa-solid fa-clock text-[10px]"></i> ${a.word_count||'--'} words</div>
+          <div class="flex items-center gap-1.5 text-xs text-slate-400"><i class="fa-solid fa-signal text-[10px]"></i> ${a.difficulty||'Medium'}</div>
+        </div>
+      </div>
+      <!-- Actions -->
+      <div class="flex md:flex-col gap-2 shrink-0 w-full md:w-auto">
+        <button onclick="approveOne(${idx}, this)"
+                class="flex-1 md:flex-none px-5 py-2.5 bg-brand-emerald hover:bg-emerald-600 text-white rounded-xl text-xs font-bold shadow-md shadow-brand-emerald/10 transition-colors flex items-center justify-center gap-2">
+          <i class="fa-solid fa-check"></i> APPROVE / DUYỆT BÀI
+        </button>
+        <button onclick="rejectOne(${idx})"
+                class="flex-1 md:flex-none px-5 py-2.5 bg-slate-100 hover:bg-red-50 hover:text-red-600 text-slate-500 rounded-xl text-xs font-bold transition-colors flex items-center justify-center gap-2 border border-transparent hover:border-red-100">
+          <i class="fa-solid fa-xmark"></i> REJECT / BỎ QUA
+        </button>
+      </div>
+    </div>`;
+  }).join('');
 }
 
-async function approveArticle(article, btnEl) {
-  btnEl.disabled = true;
-  btnEl.textContent = "Đang lưu...";
+function toggleSelect(idx) { selected.has(idx) ? selected.delete(idx) : selected.add(idx); }
+
+function selectAll() {
+  const all = crawledArticles.map((_,i) => i);
+  if (selected.size === all.length) { selected.clear(); }
+  else { all.forEach(i => selected.add(i)); }
+  document.querySelectorAll('.article-item input[type=checkbox]').forEach((cb, i) => { cb.checked = selected.has(i); });
+}
+
+async function approveOne(idx, btn) {
+  btn.disabled = true;
+  btn.innerHTML = '<i class="fa-solid fa-circle-notch fa-spin"></i> Đang lưu...';
   try {
-    const res = await fetch("/api/approve", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(article),
+    const res = await fetch('/api/approve', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify(crawledArticles[idx])
     });
     const data = await res.json();
     if (data.success) {
-      btnEl.textContent = "✔ Đã duyệt";
-      btnEl.style.background = "#16a34a";
-      showToast(data.demo_mode
-        ? "⚠️ Đã duyệt (chế độ demo - chưa cấu hình Supabase)."
-        : "✅ Đã lưu bài báo vào Supabase.");
+      btn.innerHTML = '<i class="fa-solid fa-check-double"></i> Đã duyệt';
+      btn.className = btn.className.replace('bg-brand-emerald hover:bg-emerald-600','bg-slate-300');
+      showToast(data.demo_mode ? '⚠️ Demo mode - chưa lưu vĩnh viễn' : '✅ Đã lưu vào Supabase');
     } else {
-      btnEl.disabled = false;
-      btnEl.textContent = "✅ Duyệt bài này";
-      showToast("❌ Lỗi: " + (data.error || "Không rõ nguyên nhân"));
+      btn.disabled = false;
+      btn.innerHTML = '<i class="fa-solid fa-check"></i> APPROVE / DUYỆT BÀI';
+      showToast('❌ Lỗi: ' + (data.error || 'Unknown'));
     }
-  } catch (e) {
-    btnEl.disabled = false;
-    btnEl.textContent = "✅ Duyệt bài này";
-    showToast("❌ Không thể kết nối máy chủ.");
+  } catch(e) {
+    btn.disabled = false;
+    btn.innerHTML = '<i class="fa-solid fa-check"></i> APPROVE / DUYỆT BÀI';
+    showToast('❌ Không thể kết nối server');
   }
 }
 
-$("btnCrawl").addEventListener("click", crawlNews);
+function rejectOne(idx) {
+  const item = $('item-' + idx);
+  if (item) { item.style.opacity = '0'; item.style.transform = 'translateX(40px)'; setTimeout(() => item.remove(), 300); }
+  crawledArticles.splice(idx, 1);
+  $('queueBadge').textContent = crawledArticles.length + ' Articles';
+  setTimeout(renderQueue, 350);
+}
+
+async function batchApprove() {
+  if (!selected.size) { showToast('⚠️ Chưa chọn bài nào!'); return; }
+  const idxs = [...selected];
+  let ok = 0;
+  for (const i of idxs) {
+    try {
+      const res = await fetch('/api/approve', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify(crawledArticles[i])
+      });
+      const d = await res.json();
+      if (d.success) ok++;
+    } catch(e) {}
+  }
+  showToast('✅ Đã duyệt ' + ok + '/' + idxs.length + ' bài báo');
+  selected.clear();
+  renderQueue();
+}
 </script>
 </body>
-</html>
-"""
+</html>"""
 
-
-# ============================================================
-# PHẦN 1: BACKEND - 2 ROUTE GIAO DIỆN
-# ============================================================
-
+# ═══════════════════════════════════════════════════════════
+# ROUTES
+# ═══════════════════════════════════════════════════════════
 @app.route("/")
 def student_home():
-    """Khu vực học sinh: chọn bài, luyện đọc, xem kết quả."""
-    return render_template_string(STUDENT_PAGE, css=BASE_CSS)
-
+    html_out = STUDENT_HTML.replace("{{ shared_css }}", SHARED_CSS)
+    return render_template_string(html_out)
 
 @app.route("/admin")
 def admin_home():
-    """Khu vực quản lý: quét tin RSS, duyệt bài đăng cho học sinh."""
-    return render_template_string(ADMIN_PAGE, css=BASE_CSS)
-
+    html_out = ADMIN_HTML.replace("{{ shared_css }}", SHARED_CSS)
+    return render_template_string(html_out)
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
