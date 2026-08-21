@@ -1563,9 +1563,18 @@ function renderQueue() {
 
 function toggleSel(idx) { selected.has(idx)?selected.delete(idx):selected.add(idx); }
 function selectAll() {
-  const all=crawled.map((_,i)=>i);
-  if(selected.size===all.length) selected.clear(); else all.forEach(i=>selected.add(i));
-  document.querySelectorAll('#queueList input[type=checkbox]').forEach((cb,i)=>{cb.checked=selected.has(i);});
+  const all = crawled.map((_,i)=>i);
+  const isAllSelected = selected.size === all.length;
+  if(isAllSelected) {
+    selected.clear();
+  } else {
+    all.forEach(i => selected.add(i));
+  }
+  document.querySelectorAll('#queueList input[type=checkbox]').forEach((cb, i) => {
+    cb.checked = selected.has(i);
+  });
+  const btn = document.querySelector('[onclick="selectAll()"]');
+  if(btn) btn.textContent = isAllSelected ? 'Select All' : 'Deselect All';
 }
 
 async function approveOne(idx, btn) {
@@ -1592,16 +1601,33 @@ function rejectOne(idx) {
 }
 
 async function batchApprove() {
-  if(!selected.size){showToast('⚠️ Chưa chọn bài nào!');return;}
-  let ok=0;
-  for(const i of [...selected]) {
+  if(!selected.size){ showToast('⚠️ Chưa chọn bài nào!'); return; }
+  // Lấy danh sách bài theo index TRƯỚC khi xóa
+  const toApprove = [...selected].map(i => crawled[i]).filter(Boolean);
+  if(!toApprove.length){ showToast('⚠️ Không có bài hợp lệ!'); return; }
+  const btn = document.querySelector('[onclick="batchApprove()"]');
+  if(btn){ btn.disabled=true; btn.textContent='⏳ Đang lưu...'; }
+  let ok=0, fail=0;
+  for(const article of toApprove) {
     try {
-      const r=await fetch('/api/approve',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(crawled[i])});
-      const d=await r.json(); if(d.success) ok++;
-    } catch(e){}
+      const r = await fetch('/api/approve',{
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify(article)
+      });
+      const d = await r.json();
+      if(d.success) ok++; else fail++;
+    } catch(e){ fail++; }
   }
-  showToast('✅ Đã duyệt '+ok+'/'+selected.size+' bài');
-  selected.clear(); renderQueue(); loadPublished();
+  if(btn){ btn.disabled=false; btn.textContent='✅ Batch Approve'; }
+  showToast('✅ Đã duyệt ' + ok + '/' + toApprove.length + ' bài' + (fail?' — ❌ lỗi: '+fail:''));
+  selected.clear();
+  // Xóa các bài đã approve khỏi queue
+  const approvedTitles = new Set(toApprove.map(a=>a.title));
+  crawled = crawled.filter(a => !approvedTitles.has(a.title));
+  $('queueBadge').textContent = crawled.length;
+  renderQueue();
+  loadPublished();
 }
 
 // Init
