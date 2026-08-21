@@ -20,9 +20,9 @@
 ============================================================
 """
 
-APP_VERSION  = "3.0.0"
+APP_VERSION  = "3.1.0"
 APP_NAME     = "AI Speed Reader"
-APP_RELEASED = "2026-08-19"
+APP_RELEASED = "2026-08-21"
 
 import os, re, html, hashlib
 from datetime import datetime, timezone
@@ -40,12 +40,19 @@ app.secret_key = os.environ.get("SECRET_KEY", "speedai-secret-2026")
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "").strip()
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "").strip()
 supabase = None
+print(f"[INIT] URL={SUPABASE_URL[:30] if SUPABASE_URL else 'MISSING'}")
+print(f"[INIT] KEY={SUPABASE_KEY[:15] if SUPABASE_KEY else 'MISSING'}...")
+print(f"[INIT] lib={create_client is not None}")
 if SUPABASE_URL and SUPABASE_KEY and create_client:
     try:
         supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
-        print(f"[OK] Supabase connected: {SUPABASE_URL[:40]}...")
+        test = supabase.table("articles").select("id").limit(1).execute()
+        print(f"[OK] Supabase connected OK: {SUPABASE_URL[:40]}")
     except Exception as e:
-        print(f"[WARN] Supabase: {e}")
+        print(f"[ERROR] Supabase failed: {type(e).__name__}: {e}")
+        supabase = None
+else:
+    print(f"[WARN] Supabase skipped — URL={bool(SUPABASE_URL)} KEY={bool(SUPABASE_KEY)} lib={bool(create_client)}")
 
 # ── Tables ──────────────────────────────────────────────────
 T_ARTICLES = "articles"
@@ -81,11 +88,26 @@ DEMO_ARTICLES = [
 ]
 
 RSS_FEEDS = {
-    "BBC":     "http://feeds.bbci.co.uk/news/technology/rss.xml",
-    "BBC World":"http://feeds.bbci.co.uk/news/world/rss.xml",
-    "CNN":     "http://rss.cnn.com/rss/cnn_topstories.rss",
-    "Reuters": "https://feeds.reuters.com/reuters/technologyNews",
-    "AP":      "https://feeds.apnews.com/rss/apf-topnews",
+    "BBC Tech":       "http://feeds.bbci.co.uk/news/technology/rss.xml",
+    "BBC World":      "http://feeds.bbci.co.uk/news/world/rss.xml",
+    "BBC Science":    "http://feeds.bbci.co.uk/news/science_and_environment/rss.xml",
+    "BBC Business":   "http://feeds.bbci.co.uk/news/business/rss.xml",
+    "CNN":            "http://rss.cnn.com/rss/cnn_topstories.rss",
+    "CNN Tech":       "http://rss.cnn.com/rss/cnn_tech.rss",
+    "Reuters World":  "https://feeds.reuters.com/reuters/worldNews",
+    "Reuters Tech":   "https://feeds.reuters.com/reuters/technologyNews",
+    "Reuters Biz":    "https://feeds.reuters.com/reuters/businessNews",
+    "AP Top":         "https://feeds.apnews.com/rss/apf-topnews",
+    "AP World":       "https://feeds.apnews.com/rss/apf-WorldNews",
+    "AP Tech":        "https://feeds.apnews.com/rss/apf-technology",
+    "NPR":            "https://feeds.npr.org/1001/rss.xml",
+    "NPR World":      "https://feeds.npr.org/1004/rss.xml",
+    "Guardian World": "https://www.theguardian.com/world/rss",
+    "Guardian Tech":  "https://www.theguardian.com/technology/rss",
+    "Al Jazeera":     "https://www.aljazeera.com/xml/rss/all.xml",
+    "NASA":           "https://www.nasa.gov/rss/dyn/breaking_news.rss",
+    "Science Daily":  "https://www.sciencedaily.com/rss/all.xml",
+    "Ars Technica":   "http://feeds.arstechnica.com/arstechnica/index",
 }
 
 DIFF_IMG = {
@@ -299,12 +321,15 @@ def api_articles():
 @app.route("/api/crawl", methods=["POST"])
 def api_crawl():
     found = []
+    seen_titles = set()
     for source, url in RSS_FEEDS.items():
         try:
             feed = feedparser.parse(url)
-            for entry in feed.entries[:8]:
-                title   = clean_html(entry.get("title", ""))
-                # Thử lấy nội dung dài nhất có thể
+            for entry in feed.entries[:10]:
+                title = clean_html(entry.get("title", ""))
+                if not title or title in seen_titles:
+                    continue
+                # Lấy nội dung dài nhất
                 content = ""
                 for field in ["content", "summary", "description"]:
                     val = entry.get(field, "")
@@ -313,18 +338,32 @@ def api_crawl():
                     c = clean_html(val)
                     if len(c) > len(content):
                         content = c
-                if not title or len(content.split()) < 15:
+                if len(content.split()) < 10:
                     continue
+                # Lấy ngày đăng
+                pub = ""
+                for tf in ["published_parsed", "updated_parsed"]:
+                    t = entry.get(tf)
+                    if t:
+                        try:
+                            pub = datetime(*t[:6], tzinfo=timezone.utc).strftime("%d/%m/%Y")
+                        except:
+                            pass
+                        break
+                if not pub:
+                    pub = datetime.now(timezone.utc).strftime("%d/%m/%Y")
                 diff = estimate_diff(content)
+                seen_titles.add(title)
                 found.append({
-                    "source":     source,
-                    "title":      title,
-                    "content":    content,
-                    "url":        entry.get("link", ""),
-                    "difficulty": diff,
-                    "image":      DIFF_IMG.get(diff, DIFF_IMG["Medium"]),
-                    "read_time":  str(read_time(content)),
-                    "word_count": len(content.split()),
+                    "source":      source,
+                    "title":       title,
+                    "content":     content,
+                    "url":         entry.get("link", ""),
+                    "difficulty":  diff,
+                    "image":       DIFF_IMG.get(diff, DIFF_IMG["Medium"]),
+                    "read_time":   str(read_time(content)),
+                    "word_count":  len(content.split()),
+                    "published":   pub,
                 })
         except Exception as e:
             print(f"[CRAWL ERR] {source}: {e}")
@@ -336,11 +375,14 @@ def api_approve():
     if not data.get("title") or not data.get("content"):
         return jsonify({"success": False, "error": "Thiếu dữ liệu"}), 400
     record = {
-        "title": data["title"], "source": data.get("source",""),
-        "url": data.get("url",""), "content": data["content"],
+        "title":      data["title"],
+        "source":     data.get("source",""),
+        "url":        data.get("url",""),
+        "content":    data["content"],
         "difficulty": data.get("difficulty","Medium"),
-        "image": data.get("image", DIFF_IMG["Medium"]),
-        "read_time": data.get("read_time","5"),
+        "image":      data.get("image", DIFF_IMG["Medium"]),
+        "read_time":  data.get("read_time","5"),
+        "published":  data.get("published",""),
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
     if supabase is None:
@@ -921,7 +963,16 @@ async function logout() {
 
 // ══ Articles ══
 function srcBg(s) {
-  return ({BBC:'bg-red-500',CNN:'bg-red-600',Reuters:'bg-slate-800',NatGeo:'bg-blue-600','BBC World':'bg-red-500',AP:'bg-orange-600'})[s] || 'bg-slate-700';
+  const m = {'BBC Tech':'bg-red-500','BBC World':'bg-red-500','BBC Science':'bg-red-500','BBC Business':'bg-red-500',
+    'CNN':'bg-red-600','CNN Tech':'bg-red-600',
+    'Reuters World':'bg-slate-700','Reuters Tech':'bg-slate-700','Reuters Biz':'bg-slate-700',
+    'AP Top':'bg-orange-600','AP World':'bg-orange-600','AP Tech':'bg-orange-600',
+    'NPR':'bg-blue-700','NPR World':'bg-blue-700',
+    'Guardian World':'bg-blue-900','Guardian Tech':'bg-blue-900',
+    'Al Jazeera':'bg-yellow-600','NASA':'bg-indigo-700',
+    'Science Daily':'bg-teal-600','Ars Technica':'bg-orange-700',
+    'BBC':'bg-red-500','NatGeo':'bg-blue-600','AP':'bg-orange-600','Reuters':'bg-slate-700'};
+  return m[s] || 'bg-slate-700';
 }
 function diffColor(d) { return ({Easy:'emerald',Medium:'yellow',Hard:'amber'})[d] || 'emerald'; }
 
@@ -944,6 +995,7 @@ function articleCard(a, idx, large=false) {
       <div class="flex items-center gap-2 mb-2">
         <span class="text-[10px] font-semibold text-${dc}-700 bg-${dc}-50 px-2 py-0.5 rounded">${a.difficulty||'Easy'}</span>
         <span class="text-[10px] text-slate-400">${a.read_time||'5'} min</span>
+        ${a.published ? `<span class="text-[10px] text-slate-400"><i class="fa-solid fa-calendar mr-0.5"></i>${a.published}</span>` : ''}
       </div>
       <h4 class="text-sm font-bold text-slate-900 leading-snug mb-1 ${large?'':'line-clamp-2'}">${a.title||''}</h4>
       <p class="text-xs text-slate-400 line-clamp-1">${(a.content||'').slice(0,70)}...</p>
@@ -1403,7 +1455,18 @@ function esc(s) { const d=document.createElement('div'); d.textContent=s||''; re
 let crawled = [];
 let selected = new Set();
 
-function srcBg(s) { return ({BBC:'bg-red-500','BBC World':'bg-red-500',CNN:'bg-red-600',Reuters:'bg-blue-600',AP:'bg-orange-600'})[s]||'bg-slate-700'; }
+function srcBg(s) {
+  const m = {'BBC Tech':'bg-red-500','BBC World':'bg-red-500','BBC Science':'bg-red-500','BBC Business':'bg-red-500',
+    'CNN':'bg-red-600','CNN Tech':'bg-red-600',
+    'Reuters World':'bg-slate-700','Reuters Tech':'bg-slate-700','Reuters Biz':'bg-slate-700',
+    'AP Top':'bg-orange-600','AP World':'bg-orange-600','AP Tech':'bg-orange-600',
+    'NPR':'bg-blue-700','NPR World':'bg-blue-700',
+    'Guardian World':'bg-blue-900','Guardian Tech':'bg-blue-900',
+    'Al Jazeera':'bg-yellow-600','NASA':'bg-indigo-700',
+    'Science Daily':'bg-teal-600','Ars Technica':'bg-orange-700',
+    'BBC':'bg-red-500','AP':'bg-orange-600','Reuters':'bg-slate-700'};
+  return m[s] || 'bg-slate-700';
+}
 function diffBadge(d) { return ({Easy:'text-emerald-700 bg-emerald-50',Medium:'text-yellow-700 bg-yellow-50',Hard:'text-amber-700 bg-amber-50'})[d]||'text-emerald-700 bg-emerald-50'; }
 
 // ── Published articles ──
@@ -1482,6 +1545,7 @@ function renderQueue() {
           <span><i class="fa-solid fa-clock mr-1"></i>${a.word_count||'--'} words</span>
           <span><i class="fa-solid fa-signal mr-1"></i>${a.difficulty||'Medium'}</span>
           <span><i class="fa-solid fa-clock-rotate-left mr-1"></i>${a.read_time||'5'} min</span>
+          <span><i class="fa-solid fa-calendar mr-1"></i>${a.published||'--'}</span>
         </div>
       </div>
       <div class="flex md:flex-col gap-2 shrink-0 w-full md:w-auto">
