@@ -20,7 +20,7 @@
 ============================================================
 """
 
-APP_VERSION  = "3.1.0"
+APP_VERSION  = "3.2.0"
 APP_NAME     = "AI Speed Reader"
 APP_RELEASED = "2026-08-21"
 
@@ -88,6 +88,7 @@ DEMO_ARTICLES = [
 ]
 
 RSS_FEEDS = {
+    # ── English ──────────────────────────────────────────
     "BBC Tech":       "http://feeds.bbci.co.uk/news/technology/rss.xml",
     "BBC World":      "http://feeds.bbci.co.uk/news/world/rss.xml",
     "BBC Science":    "http://feeds.bbci.co.uk/news/science_and_environment/rss.xml",
@@ -108,6 +109,23 @@ RSS_FEEDS = {
     "NASA":           "https://www.nasa.gov/rss/dyn/breaking_news.rss",
     "Science Daily":  "https://www.sciencedaily.com/rss/all.xml",
     "Ars Technica":   "http://feeds.arstechnica.com/arstechnica/index",
+    "Japan Times":    "https://www.japantimes.co.jp/feed/",
+    "Nikkei Asia":    "https://asia.nikkei.com/rss/feed/nar",
+    # ── Japanese ─────────────────────────────────────────
+    "NHK Easy":       "https://www3.nhk.or.jp/rss/news/cat0.xml",
+    "NHK World":      "https://www3.nhk.or.jp/rss/news/cat1.xml",
+    "NHK Science":    "https://www3.nhk.or.jp/rss/news/cat3.xml",
+    "NHK Business":   "https://www3.nhk.or.jp/rss/news/cat5.xml",
+    "Asahi":          "http://rss.asahi.com/rss/asahi/newsheadlines.rdf",
+    "Yomiuri":        "https://www.yomiuri.co.jp/feed/rss2/world/",
+    "Mainichi":       "https://mainichi.jp/rss/etc/mainichi-flash.rss",
+    "Yahoo JP":       "https://news.yahoo.co.jp/rss/topics/top-picks.xml",
+}
+
+# Nhãn ngôn ngữ cho mỗi nguồn
+FEED_LANG = {
+    "NHK Easy":"ja","NHK World":"ja","NHK Science":"ja","NHK Business":"ja",
+    "Asahi":"ja","Yomiuri":"ja","Mainichi":"ja","Yahoo JP":"ja",
 }
 
 DIFF_IMG = {
@@ -354,6 +372,7 @@ def api_crawl():
                     pub = datetime.now(timezone.utc).strftime("%d/%m/%Y")
                 diff = estimate_diff(content)
                 seen_titles.add(title)
+                lang = FEED_LANG.get(source, "en")
                 found.append({
                     "source":      source,
                     "title":       title,
@@ -364,6 +383,7 @@ def api_crawl():
                     "read_time":   str(read_time(content)),
                     "word_count":  len(content.split()),
                     "published":   pub,
+                    "lang":        lang,
                 })
         except Exception as e:
             print(f"[CRAWL ERR] {source}: {e}")
@@ -383,6 +403,7 @@ def api_approve():
         "image":      data.get("image", DIFF_IMG["Medium"]),
         "read_time":  data.get("read_time","5"),
         "published":  data.get("published",""),
+        "lang":       data.get("lang","en"),
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
     if supabase is None:
@@ -707,8 +728,16 @@ STUDENT_HTML = r"""<!DOCTYPE html>
                 Hãy chọn một bài báo từ danh sách bên dưới, sau đó nhấn nút microphone màu xanh để bắt đầu luyện đọc. Từ nào đọc đúng sẽ tự động chuyển màu xanh lá.
               </p>
             </div>
+            <!-- Pitch + Waveform Visualizer -->
+            <div class="mt-4 rounded-2xl overflow-hidden bg-slate-950 border border-slate-800" style="height:90px;position:relative;">
+              <canvas id="waveCanvas" style="position:absolute;top:0;left:0;width:100%;height:50%;"></canvas>
+              <canvas id="pitchCanvas" style="position:absolute;bottom:0;left:0;width:100%;height:50%;"></canvas>
+              <div id="vizLabel" class="absolute top-1 left-3 text-[9px] text-slate-500 font-mono">WAVEFORM</div>
+              <div id="pitchLabel" class="absolute bottom-1 left-3 text-[9px] text-slate-500 font-mono">PITCH</div>
+              <div id="pitchValue" class="absolute top-1 right-3 text-[10px] text-brand-emerald font-bold font-mono">-- Hz</div>
+            </div>
             <!-- Controls -->
-            <div class="mt-5 flex items-center justify-center gap-5 pt-4 border-t border-slate-50">
+            <div class="mt-4 flex items-center justify-center gap-5 pt-4 border-t border-slate-50">
               <button onclick="prevArticle()" class="w-12 h-12 rounded-full bg-slate-100 text-slate-500 hover:bg-slate-200 flex items-center justify-center transition-colors">
                 <i class="fa-solid fa-backward-step"></i>
               </button>
@@ -744,7 +773,7 @@ STUDENT_HTML = r"""<!DOCTYPE html>
               <div class="flex justify-between text-[10px] text-slate-400 font-medium mb-4">
                 <span>100</span><span>300</span><span>500</span><span>700</span><span>800</span>
               </div>
-              <div class="flex items-center justify-center gap-[3px] h-8" id="waveform"></div>
+              <!-- realtime viz moved above mic button -->
             </div>
             <!-- Metrics -->
             <div class="grid grid-cols-3 gap-3">
@@ -775,6 +804,11 @@ STUDENT_HTML = r"""<!DOCTYPE html>
           <div class="flex items-center justify-between mb-4">
             <h2 class="text-xl font-bold text-slate-900">Recommended Articles</h2>
             <button onclick="showSection('library')" class="text-sm font-semibold text-brand-blue hover:underline">View all <i class="fa-solid fa-chevron-right text-xs ml-1"></i></button>
+          </div>
+          <div class="flex gap-2 mb-3 flex-wrap" id="langFilter">
+            <button onclick="filterLang(null)" id="flAll" class="px-3 py-1.5 rounded-full text-xs font-bold bg-brand-blue text-white">All</button>
+            <button onclick="filterLang('en')" id="flEn" class="px-3 py-1.5 rounded-full text-xs font-bold bg-slate-100 text-slate-600 hover:bg-slate-200">🇬🇧 English</button>
+            <button onclick="filterLang('ja')" id="flJa" class="px-3 py-1.5 rounded-full text-xs font-bold bg-slate-100 text-slate-600 hover:bg-slate-200">🇯🇵 Japanese</button>
           </div>
           <div id="articleGrid" class="grid grid-cols-2 lg:grid-cols-4 gap-4">
             <div class="col-span-2 lg:col-span-4 text-center py-10 text-slate-400">
@@ -971,6 +1005,9 @@ function srcBg(s) {
     'Guardian World':'bg-blue-900','Guardian Tech':'bg-blue-900',
     'Al Jazeera':'bg-yellow-600','NASA':'bg-indigo-700',
     'Science Daily':'bg-teal-600','Ars Technica':'bg-orange-700',
+    'Japan Times':'bg-red-700','Nikkei Asia':'bg-pink-700',
+    'NHK Easy':'bg-rose-600','NHK World':'bg-rose-600','NHK Science':'bg-rose-600','NHK Business':'bg-rose-600',
+    'Asahi':'bg-red-800','Yomiuri':'bg-blue-800','Mainichi':'bg-green-800','Yahoo JP':'bg-purple-700',
     'BBC':'bg-red-500','NatGeo':'bg-blue-600','AP':'bg-orange-600','Reuters':'bg-slate-700'};
   return m[s] || 'bg-slate-700';
 }
@@ -990,6 +1027,7 @@ function articleCard(a, idx, large=false) {
            class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
            onerror="this.src='https://images.unsplash.com/photo-1451187580459-43490279c0fa?w=600&q=70'">
       <span class="absolute top-3 left-3 text-[10px] font-bold text-white ${sb} px-2 py-0.5 rounded">${a.source||'--'}</span>
+      ${a.lang==='ja'?'<span class="absolute top-3 right-3 text-[10px] bg-white/90 px-1.5 py-0.5 rounded font-bold text-red-600">🇯🇵 JA</span>':''} 
     </div>
     <div class="p-4">
       <div class="flex items-center gap-2 mb-2">
@@ -1003,13 +1041,31 @@ function articleCard(a, idx, large=false) {
   </article>`;
 }
 
+let allArticles=[], activeLang=null;
+
 async function loadArticles() {
   try {
     const res = await fetch('/api/articles');
     const data = await res.json();
-    articles = data.articles || [];
-  } catch(e) { articles = []; }
+    allArticles = data.articles || [];
+    articles = allArticles;
+  } catch(e) { allArticles=[]; articles=[]; }
   renderArticleGrid();
+}
+
+function filterLang(lang) {
+  activeLang=lang;
+  articles = lang ? allArticles.filter(a=>(a.lang||'en')===lang) : allArticles;
+  selIdx=-1;
+  ['flAll','flEn','flJa'].forEach(id=>{
+    const btn=$(id); if(!btn)return;
+    btn.className='px-3 py-1.5 rounded-full text-xs font-bold '+
+      ((lang===null&&id==='flAll')||(lang==='en'&&id==='flEn')||(lang==='ja'&&id==='flJa')
+        ?'bg-brand-blue text-white'
+        :'bg-slate-100 text-slate-600 hover:bg-slate-200');
+  });
+  renderArticleGrid();
+  renderLibrary();
 }
 
 function renderArticleGrid() {
@@ -1073,7 +1129,7 @@ function startReading() {
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
   if (!SR) { showToast('❌ Cần dùng Chrome để nhận diện giọng nói.'); return; }
   recognition = new SR();
-  recognition.lang = 'en-US';
+  recognition.lang = (articles[selIdx]?.lang==='ja') ? 'ja-JP' : 'en-US';
   recognition.continuous = true;
   recognition.interimResults = true;
   recognition.onresult = e => {
@@ -1090,14 +1146,19 @@ function startReading() {
   recognition.onend = ()=>{ isListening=false; micUI(false); };
   recognition.start();
   isListening=true; startTime=performance.now();
-  micUI(true); waveformUI(true);
+  micUI(true);
+  // Start Web Audio for waveform + pitch
+  navigator.mediaDevices.getUserMedia({audio:true,video:false})
+    .then(stream=>initAudio(stream))
+    .catch(e=>console.warn('Audio viz unavailable:',e));
 }
 
 function stopReading() { try{recognition?.stop();}catch(e){} finishReading(); }
 
 function finishReading() {
   try{recognition?.stop();}catch(e){}
-  isListening=false; micUI(false); waveformUI(false);
+  isListening=false; micUI(false);
+  stopAudio();
   if(!startTime) return;
   const min  = Math.max((performance.now()-startTime)/60000, 0.05);
   const wpm  = Math.round(matchIdx/min);
@@ -1262,11 +1323,150 @@ function micUI(active) {
   }
 }
 
-// ══ Waveform ══
-function waveformUI(active=false) {
-  const hs=[30,60,40,80,100,70,50,35,55,25];
-  $('waveform').innerHTML=hs.map((h,i)=>`<span class="w-1 rounded-full wave-bar ${active&&i>2&&i<7?'bg-brand-emerald':'bg-slate-200'}" style="height:${h}%;animation-delay:${i*.1}s"></span>`).join('');
+// ══ Audio Context + Pitch + Waveform ══
+let audioCtx=null, analyser=null, micStream=null, animFrame=null;
+const pitchHistory=[];
+const MAX_PITCH_POINTS=120;
+
+function initAudio(stream) {
+  audioCtx = new (window.AudioContext||window.webkitAudioContext)();
+  analyser = audioCtx.createAnalyser();
+  analyser.fftSize = 2048;
+  analyser.smoothingTimeConstant = 0.8;
+  const src = audioCtx.createMediaStreamSource(stream);
+  src.connect(analyser);
+  micStream = stream;
+  drawLoop();
 }
+
+function stopAudio() {
+  if(animFrame) { cancelAnimationFrame(animFrame); animFrame=null; }
+  if(micStream) { micStream.getTracks().forEach(t=>t.stop()); micStream=null; }
+  if(audioCtx)  { audioCtx.close(); audioCtx=null; }
+  analyser=null;
+  pitchHistory.length=0;
+  clearCanvases();
+}
+
+function clearCanvases() {
+  ['waveCanvas','pitchCanvas'].forEach(id=>{
+    const c=$(id); if(!c)return;
+    const ctx=c.getContext('2d');
+    ctx.clearRect(0,0,c.width,c.height);
+  });
+  const pv=$('pitchValue'); if(pv) pv.textContent='-- Hz';
+}
+
+function resizeCanvas(c) {
+  const r=c.parentElement.getBoundingClientRect();
+  c.width=r.width*devicePixelRatio;
+  c.height=c.offsetHeight*devicePixelRatio;
+}
+
+function drawLoop() {
+  animFrame = requestAnimationFrame(drawLoop);
+  if(!analyser) return;
+  const buf = new Float32Array(analyser.fftSize);
+  analyser.getFloatTimeDomainData(buf);
+
+  // ── Waveform canvas ──
+  const wc=$('waveCanvas');
+  if(wc){
+    resizeCanvas(wc);
+    const ctx=wc.getContext('2d'); const W=wc.width,H=wc.height;
+    ctx.clearRect(0,0,W,H);
+    ctx.beginPath();
+    ctx.strokeStyle='#2ecc71'; ctx.lineWidth=1.5*devicePixelRatio;
+    const sl=buf.length/W;
+    for(let x=0;x<W;x++){
+      const v=buf[Math.floor(x*sl)];
+      const y=H/2+(v*H*0.45);
+      x===0?ctx.moveTo(x,y):ctx.lineTo(x,y);
+    }
+    ctx.stroke();
+    // center line
+    ctx.beginPath(); ctx.strokeStyle='#334155'; ctx.lineWidth=0.5;
+    ctx.moveTo(0,H/2); ctx.lineTo(W,H/2); ctx.stroke();
+  }
+
+  // ── Pitch detection (autocorrelation) ──
+  const pitch = detectPitch(buf, audioCtx.sampleRate);
+  const pv=$('pitchValue');
+  if(pitch>50&&pitch<1000){
+    pitchHistory.push(pitch);
+    if(pitchHistory.length>MAX_PITCH_POINTS) pitchHistory.shift();
+    if(pv) pv.textContent=Math.round(pitch)+' Hz';
+  } else {
+    pitchHistory.push(null);
+    if(pitchHistory.length>MAX_PITCH_POINTS) pitchHistory.shift();
+    if(pv) pv.textContent='-- Hz';
+  }
+
+  // ── Pitch canvas ──
+  const pc=$('pitchCanvas');
+  if(pc&&pitchHistory.length>1){
+    resizeCanvas(pc);
+    const ctx=pc.getContext('2d'); const W=pc.width,H=pc.height;
+    ctx.clearRect(0,0,W,H);
+    const minP=80,maxP=400;
+    const pts=pitchHistory.filter(Boolean);
+    // background grid lines
+    [0.25,0.5,0.75].forEach(r=>{
+      ctx.beginPath(); ctx.strokeStyle='#1e293b'; ctx.lineWidth=0.5;
+      ctx.moveTo(0,H*r); ctx.lineTo(W,H*r); ctx.stroke();
+    });
+    // pitch line
+    ctx.beginPath();
+    let first=true;
+    pitchHistory.forEach((p,i)=>{
+      const x=(i/MAX_PITCH_POINTS)*W;
+      if(!p){first=true;return;}
+      const y=H-((Math.min(Math.max(p,minP),maxP)-minP)/(maxP-minP))*H;
+      if(first){ctx.moveTo(x,y);first=false;}else ctx.lineTo(x,y);
+    });
+    const grad=ctx.createLinearGradient(0,0,W,0);
+    grad.addColorStop(0,'#2563eb55');
+    grad.addColorStop(1,'#2ecc71');
+    ctx.strokeStyle=grad; ctx.lineWidth=2*devicePixelRatio;
+    ctx.lineJoin='round'; ctx.lineCap='round';
+    ctx.stroke();
+    // dots at valid points
+    pitchHistory.forEach((p,i)=>{
+      if(!p)return;
+      const x=(i/MAX_PITCH_POINTS)*W;
+      const y=H-((Math.min(Math.max(p,minP),maxP)-minP)/(maxP-minP))*H;
+      ctx.beginPath(); ctx.arc(x,y,2*devicePixelRatio,0,Math.PI*2);
+      ctx.fillStyle='#2ecc71'; ctx.fill();
+    });
+  }
+}
+
+function detectPitch(buf, sampleRate) {
+  // Autocorrelation method
+  const SIZE=buf.length;
+  let rms=0;
+  for(let i=0;i<SIZE;i++) rms+=buf[i]*buf[i];
+  rms=Math.sqrt(rms/SIZE);
+  if(rms<0.01) return -1; // silence
+  let r1=0,r2=SIZE-1;
+  const thres=0.2;
+  for(let i=0;i<SIZE/2;i++){ if(Math.abs(buf[i])<thres){r1=i;break;} }
+  for(let i=1;i<SIZE/2;i++){ if(Math.abs(buf[SIZE-i])<thres){r2=SIZE-i;break;} }
+  const buf2=buf.slice(r1,r2);
+  const c=new Float32Array(buf2.length).fill(0);
+  for(let i=0;i<buf2.length;i++) for(let j=0;j<buf2.length-i;j++) c[i]+=buf2[j]*buf2[j+i];
+  let d=0; while(c[d]>c[d+1]) d++;
+  let maxval=-1,maxpos=-1;
+  for(let i=d;i<buf2.length;i++){ if(c[i]>maxval){maxval=c[i];maxpos=i;} }
+  if(maxpos<1) return -1;
+  // parabolic interpolation
+  const x1=c[maxpos-1],x2=c[maxpos],x3=maxpos+1<buf2.length?c[maxpos+1]:x2;
+  const a=(x1+x3-2*x2)/2, b=(x3-x1)/2;
+  const shift = a ? -b/(2*a) : 0;
+  return sampleRate/(maxpos+shift);
+}
+
+function waveformUI(active=false) { /* replaced by Web Audio */ }
 
 // ══ Check session on load ══
 async function checkSession() {
@@ -1464,6 +1664,9 @@ function srcBg(s) {
     'Guardian World':'bg-blue-900','Guardian Tech':'bg-blue-900',
     'Al Jazeera':'bg-yellow-600','NASA':'bg-indigo-700',
     'Science Daily':'bg-teal-600','Ars Technica':'bg-orange-700',
+    'Japan Times':'bg-red-700','Nikkei Asia':'bg-pink-700',
+    'NHK Easy':'bg-rose-600','NHK World':'bg-rose-600','NHK Science':'bg-rose-600','NHK Business':'bg-rose-600',
+    'Asahi':'bg-red-800','Yomiuri':'bg-blue-800','Mainichi':'bg-green-800','Yahoo JP':'bg-purple-700',
     'BBC':'bg-red-500','AP':'bg-orange-600','Reuters':'bg-slate-700'};
   return m[s] || 'bg-slate-700';
 }
