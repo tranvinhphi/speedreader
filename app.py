@@ -20,7 +20,7 @@
 ============================================================
 """
 
-APP_VERSION  = "3.2.0"
+APP_VERSION  = "3.3.0"
 APP_NAME     = "AI Speed Reader"
 APP_RELEASED = "2026-08-21"
 
@@ -457,6 +457,8 @@ tailwind.config={theme:{extend:{
 .word-span{transition:all .3s ease;border-radius:4px;padding:1px 2px}
 .word-span.read{background:#dcfce7;color:#15803d;font-weight:700}
 .word-span.current{background:#fef9c3}
+.word-span.tts-active{background:#e0e7ff;color:#4338ca;box-shadow:0 0 0 2px #818cf8}
+.word-span:hover{background:#f1f5f9;cursor:pointer}
 .modal-bg{display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:200;align-items:center;justify-content:center}
 .modal-bg.show{display:flex}
 </style>
@@ -718,9 +720,21 @@ STUDENT_HTML = r"""<!DOCTYPE html>
                 <h3 class="text-base lg:text-lg font-bold text-slate-900" id="articleTitle">Chọn bài báo bên dưới</h3>
               </div>
               <div class="flex items-center gap-2 text-slate-400 shrink-0 ml-2">
+                <!-- Play TTS button -->
+                <button id="btnPlayTTS" onclick="playTTS()" title="Đọc mẫu toàn bài" class="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-indigo-50 text-indigo-600 hover:bg-indigo-100 text-xs font-bold transition-colors">
+                  <i class="fa-solid fa-play text-xs" id="ttsIcon"></i>
+                  <span id="ttsLabel">Đọc mẫu</span>
+                </button>
                 <button onclick="cycleFontSize()" title="Cỡ chữ" class="hover:text-slate-700"><i class="fa-solid fa-font text-lg"></i></button>
                 <button onclick="toggleFocus()" title="Focus" class="hover:text-slate-700"><i class="fa-solid fa-glasses text-lg"></i></button>
               </div>
+            </div>
+            <!-- Word TTS tooltip -->
+            <div id="wordTooltip" style="display:none;position:fixed;z-index:999;pointer-events:none;"
+              class="bg-slate-900 text-white rounded-xl px-3 py-2 shadow-xl text-xs font-bold flex items-center gap-2">
+              <i class="fa-solid fa-volume-high text-indigo-300"></i>
+              <span id="tooltipWord"></span>
+              <span class="text-slate-400 font-normal">click để nghe</span>
             </div>
             <!-- Text -->
             <div id="readingPane" class="overflow-y-auto no-scrollbar" style="height:300px;">
@@ -1107,8 +1121,13 @@ function buildWords(content) {
   const raw = content.trim().split(/\s+/);
   words = raw.map(w => ({display:w, clean:norm(w)})).filter(w=>w.clean);
   matchIdx=0; spokenCount=0; correctCount=0;
+  const lang = (selIdx>=0 && articles[selIdx]?.lang==='ja') ? 'ja-JP' : 'en-US';
   $('readingText').innerHTML = words.map((w,i) =>
-    `<span class="word-span" id="ws-${i}">${w.display} </span>`).join('');
+    `<span class="word-span cursor-pointer" id="ws-${i}"
+      onmouseenter="showWordTip(event,'${w.display.replace(/'/g,"\\'")}','${lang}')"
+      onmouseleave="hideWordTip()"
+      onclick="speakWord('${w.display.replace(/'/g,"\\'")}','${lang}')"
+    >${w.display} </span>`).join('');
   $('ws-0')?.classList.add('current');
 }
 
@@ -1467,6 +1486,116 @@ function detectPitch(buf, sampleRate) {
 }
 
 function waveformUI(active=false) { /* replaced by Web Audio */ }
+
+// ══ TTS — Đọc mẫu ══
+let ttsUtter=null, ttsPlaying=false;
+
+function getLang() {
+  return (selIdx>=0 && articles[selIdx]?.lang==='ja') ? 'ja-JP' : 'en-US';
+}
+
+function getVoice(lang) {
+  const voices = speechSynthesis.getVoices();
+  return voices.find(v=>v.lang===lang && v.localService) ||
+         voices.find(v=>v.lang.startsWith(lang.split('-')[0])) ||
+         voices[0] || null;
+}
+
+function speakWord(word, lang) {
+  speechSynthesis.cancel();
+  const u = new SpeechSynthesisUtterance(word);
+  u.lang = lang || getLang();
+  u.rate = 0.85;
+  u.pitch = 1.1;
+  const v = getVoice(u.lang);
+  if(v) u.voice = v;
+  speechSynthesis.speak(u);
+  // Flash the tooltip
+  const tip=$('wordTooltip');
+  if(tip){ tip.style.background='#4f46e5'; setTimeout(()=>{tip.style.background='#0f172a';},300); }
+}
+
+function showWordTip(e, word, lang) {
+  const tip=$('wordTooltip');
+  if(!tip) return;
+  $('tooltipWord').textContent = word;
+  tip.style.display='flex';
+  tip.style.left=(e.clientX+8)+'px';
+  tip.style.top=(e.clientY-38)+'px';
+}
+function hideWordTip() {
+  const tip=$('wordTooltip');
+  if(tip) tip.style.display='none';
+}
+
+// Play full article TTS
+function playTTS() {
+  if(selIdx<0){ showToast('⚠️ Chọn bài báo trước!'); return; }
+  if(ttsPlaying){
+    speechSynthesis.cancel();
+    ttsPlaying=false;
+    setTTSBtn(false);
+    return;
+  }
+  const lang = getLang();
+  const text = articles[selIdx]?.content || '';
+  if(!text){ showToast('❌ Không có nội dung!'); return; }
+  // Split into sentences for better pacing
+  const sentences = text.match(/[^.!?]+[.!?]*/g) || [text];
+  let idx=0;
+  ttsPlaying=true;
+  setTTSBtn(true);
+  // Highlight words while reading
+  let wordIdx=0;
+  function speakNext() {
+    if(!ttsPlaying || idx>=sentences.length){
+      ttsPlaying=false; setTTSBtn(false);
+      return;
+    }
+    const u = new SpeechSynthesisUtterance(sentences[idx++]);
+    u.lang = lang;
+    u.rate = 0.82;
+    u.pitch = 1.0;
+    const v = getVoice(lang);
+    if(v) u.voice = v;
+    u.onboundary = e => {
+      if(e.name==='word'){
+        // Highlight current word
+        $('ws-'+wordIdx)?.classList.remove('tts-active');
+        wordIdx++;
+        $('ws-'+wordIdx)?.classList.add('tts-active');
+        $('ws-'+wordIdx)?.scrollIntoView({behavior:'smooth',block:'center'});
+      }
+    };
+    u.onend = speakNext;
+    u.onerror = ()=>{ ttsPlaying=false; setTTSBtn(false); };
+    speechSynthesis.speak(u);
+  }
+  speechSynthesis.cancel();
+  speakNext();
+}
+
+function setTTSBtn(playing) {
+  const icon=$('ttsIcon'), label=$('ttsLabel'), btn=$('btnPlayTTS');
+  if(!btn) return;
+  if(playing){
+    icon.className='fa-solid fa-stop text-xs';
+    label.textContent='Dừng';
+    btn.className='flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-red-50 text-red-600 hover:bg-red-100 text-xs font-bold transition-colors';
+  } else {
+    icon.className='fa-solid fa-play text-xs';
+    label.textContent='Đọc mẫu';
+    btn.className='flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-indigo-50 text-indigo-600 hover:bg-indigo-100 text-xs font-bold transition-colors';
+    // Remove all tts-active highlights
+    document.querySelectorAll('.tts-active').forEach(el=>el.classList.remove('tts-active'));
+  }
+}
+
+// Load voices async (Chrome needs this)
+if(window.speechSynthesis) {
+  speechSynthesis.getVoices();
+  speechSynthesis.onvoiceschanged = ()=>speechSynthesis.getVoices();
+}
 
 // ══ Check session on load ══
 async function checkSession() {
